@@ -55,6 +55,8 @@ try {
   check('health endpoint responds', health.ok === true);
   check('reports project', health.project === 'smoke-test-project');
   check('reports model', health.models.transcribe.startsWith('gemini-'), health.models.transcribe);
+  check('reports a digest model', Boolean(health.models.digest), health.models.digest);
+  check('reports audio retention', typeof health.retainAudioDays === 'number', `${health.retainAudioDays} days`);
   check(
     'flags segmented mode without GCS_BUCKET',
     health.singlePassTranscription === false,
@@ -130,6 +132,29 @@ try {
   ws.close();
   await sleep(200);
 
+  console.log('\n4b. Roll call, pause and resume');
+  const started = await (await fetch(`${BASE}/api/meetings/${created.id}/start`, { method: 'POST' })).json();
+  check('start enters roll call', started.status === 'roll_call', started.status);
+  const rolled = await (await fetch(`${BASE}/api/meetings/${created.id}/roll-call-done`, { method: 'POST' })).json();
+  check('roll call marks its end position', Math.abs(rolled.rollCallEndedAt - 3) < 0.01, `${rolled.rollCallEndedAt}s`);
+  check('moves into recording', rolled.status === 'recording');
+  const paused = await (await fetch(`${BASE}/api/meetings/${created.id}/pause`, { method: 'POST' })).json();
+  check('pause records the position', paused.pauses?.length === 1 && Math.abs(paused.pauses[0].at - 3) < 0.01, JSON.stringify(paused.pauses));
+  check('status is paused', paused.status === 'paused');
+  const resumed = await (await fetch(`${BASE}/api/meetings/${created.id}/resume`, { method: 'POST' })).json();
+  check('resume returns to recording', resumed.status === 'recording');
+  check('pause marks are kept', resumed.pauses?.length === 1);
+
+  console.log('\n4c. Audio clips for evidence playback');
+  const clip = await fetch(`${BASE}/api/meetings/${created.id}/clip?at=2&pad=2`);
+  check('clip returns audio', clip.status === 200 && clip.headers.get('content-type') === 'audio/wav', `${clip.status}`);
+  const clipBytes = Buffer.from(await clip.arrayBuffer());
+  check('clip is a valid WAV', clipBytes.toString('ascii', 0, 4) === 'RIFF');
+  // Requested 0s..4s but only 3s exists, so the clip is clamped to what there is.
+  check('clip clamped to available audio', clipBytes.length === 44 + 3 * 32000, `${clipBytes.length} bytes`);
+  const badClip = await fetch(`${BASE}/api/meetings/${created.id}/clip`);
+  check('clip without a position is rejected', badClip.status === 400, `${badClip.status}`);
+
   console.log('\n5. Meeting snapshot');
   const snap = await (await fetch(`${BASE}/api/meetings/${created.id}`)).json();
   check('audio duration reported', Math.abs(snap.audioSeconds - 3) < 0.01, `${snap.audioSeconds}s`);
@@ -137,10 +162,13 @@ try {
   check('transcript empty before processing', snap.transcript.length === 0);
 
   console.log('\n6. Audio deletion');
+  const goneClip0 = null; void goneClip0;
   await fetch(`${BASE}/api/meetings/${created.id}/audio`, { method: 'DELETE' });
   check('pcm removed', !fs.existsSync(pcmFile));
   const afterDelete = await (await fetch(`${BASE}/api/meetings/${created.id}`)).json();
   check('meta survives audio deletion', afterDelete.meta.id === created.id);
+  const goneClip = await fetch(`${BASE}/api/meetings/${created.id}/clip?at=2`);
+  check('clip 404s once the audio is gone', goneClip.status === 404, `${goneClip.status}`);
 
   console.log('\n7. Meeting list');
   const list = await (await fetch(`${BASE}/api/meetings`)).json();

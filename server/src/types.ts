@@ -1,6 +1,8 @@
 export type MeetingStatus =
   | 'setup'
+  | 'roll_call'
   | 'recording'
+  | 'paused'
   | 'transcribing'
   | 'identifying'
   | 'awaiting_speakers'
@@ -20,6 +22,24 @@ export interface MeetingMeta {
   /** Local start time as HH:mm, captured when recording begins. */
   startedAt?: string;
   endedAt?: string;
+  /**
+   * Position in the recording, in seconds, where the roll call ended.
+   *
+   * The roll call is part of the same continuous recording -- it has to be, or
+   * the voices captured during it could not be matched to the voices in the
+   * meeting. Marking where it ends turns "look at roughly the first few
+   * minutes" into "the introductions are between 0s and here", which is a much
+   * stronger signal when mapping voices to names.
+   */
+  rollCallEndedAt?: number;
+  /**
+   * Where the recording was paused and resumed, in recording-seconds.
+   *
+   * Paused time does not exist in the audio, so a break compresses the
+   * timeline. Keeping the marks lets the transcript show where the gap was
+   * rather than silently splicing two conversations together.
+   */
+  pauses: Array<{ at: number; label?: string }>;
   chair?: string;
   secretary?: string;
   /** Names known up front, e.g. from a calendar invite. Helps speaker mapping. */
@@ -121,9 +141,34 @@ export interface Minutes {
   nextMeeting: string | null;
 }
 
+/**
+ * A rolling summary block, produced every few minutes while the meeting runs.
+ *
+ * This is what makes the meeting reviewable in the room. Scrolling an hour of
+ * raw transcript to remember what was discussed does not work -- you have to
+ * already know what you are looking for. A dozen timestamped topic blocks can
+ * actually be scanned.
+ *
+ * Deliberately kept out of the final minutes pipeline: these are mid-meeting
+ * impressions formed without knowing how the discussion ends, and the minutes
+ * are drafted independently from the complete transcript.
+ */
+export interface DigestBlock {
+  start: number;
+  end: number;
+  heading: string;
+  bullets: string[];
+  /** Provisional. Anything that sounded like a decision, subject to change. */
+  decisions: string[];
+  /** True when this continues the topic of the previous block. */
+  continuesPrevious: boolean;
+}
+
 /** Server -> client over the websocket during recording. */
 export type ServerEvent =
   | { type: 'ready'; meetingId: string }
   | { type: 'live'; start: number; end: number; text: string }
+  | { type: 'digest'; block: DigestBlock }
+  | { type: 'roll_call_ended'; at: number; namesHeard: string[] }
   | { type: 'chunk_ack'; index: number; seconds: number }
   | { type: 'error'; message: string };

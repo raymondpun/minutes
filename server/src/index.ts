@@ -6,14 +6,16 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 
-import { bytesPerSecond, config } from './config.js';
+import { config, liveChunkBytes } from './config.js';
 import * as store from './store.js';
 import * as gcs from './gcs.js';
 import { transcribeChunk } from './pipeline/live.js';
+import { buildDigest } from './pipeline/digest.js';
+import { checkRollCall } from './pipeline/rollcall.js';
 import { buildTranscript } from './pipeline/transcribe.js';
 import { applySpeakerNames, identifySpeakers } from './pipeline/identify.js';
 import { draftMinutes, renderMarkdown } from './pipeline/minutes.js';
-import { pcmDurationSeconds } from './wav.js';
+import { pcmDurationSeconds, pcmToWav, secondsToByteOffset } from './wav.js';
 import type { MeetingMeta, ServerEvent, SpeakerIdentification } from './types.js';
 
 const app = express();
@@ -61,6 +63,7 @@ app.get('/api/health', (_req, res) => {
     location: config.location,
     models: config.models,
     singlePassTranscription: Boolean(config.gcsBucket),
+    retainAudioDays: config.retainAudioDays,
   });
 });
 
@@ -85,6 +88,7 @@ app.post(
       expectedAttendees: toStringArray(b.expectedAttendees),
       apologies: toStringArray(b.apologies),
       agenda: toStringArray(b.agenda),
+      pauses: [],
     });
     res.status(201).json(meta);
   }),
@@ -95,11 +99,13 @@ app.get(
   wrap(async (req, res) => {
     const id = req.params.id!;
     const meta = await store.readMeta(id);
-    const [transcript, speakers, minutes, live, audioBytes] = await Promise.all([
+    resumeIfStalled(meta);
+    const [transcript, speakers, minutes, live, digest, audioBytes] = await Promise.all([
       store.readTranscript(id),
       store.readSpeakers(id),
       store.readMinutes(id),
       store.readLive(id),
+      store.readDigest(id),
       store.pcmSize(id),
     ]);
     res.json({
@@ -109,21 +115,71 @@ app.get(
       minutes: minutes?.minutes ?? null,
       markdown: minutes?.markdown ?? null,
       live,
+      digest,
       audioSeconds: pcmDurationSeconds(audioBytes),
-      audioAvailable: audioBytes > 0,
+      // Playback works from either the local copy or the retained one in
+      // Cloud Storage, so the client asks about both.
+      audioAvailable: audioBytes > 0 || (await gcs.audioExists(id).catch(() => false)),
     });
   }),
 );
 
+/**
+ * Begin recording, starting with the roll call.
+ *
+ * The roll call is the opening stretch of the same continuous recording rather
+ * than a separate clip: matching a voice to a name only works if both were
+ * captured by the same microphone in the same room in one pass.
+ */
 app.post(
   '/api/meetings/:id/start',
   wrap(async (req, res) => {
     const meta = await store.patchMeta(req.params.id!, {
-      status: 'recording',
+      status: 'roll_call',
       startedAt: localTime(),
       progress: undefined,
       error: undefined,
     });
+    res.json(meta);
+  }),
+);
+
+/** Roll call finished -- mark where it ended and move into the meeting proper. */
+app.post(
+  '/api/meetings/:id/roll-call-done',
+  wrap(async (req, res) => {
+    const id = req.params.id!;
+    const meta = await store.patchMeta(id, {
+      status: 'recording',
+      rollCallEndedAt: await store.recordedSeconds(id),
+    });
+    res.json(meta);
+  }),
+);
+
+/**
+ * Pause. The client releases the microphone, so the phone's recording
+ * indicator goes out and the room can see it has stopped -- which matters more
+ * than the tokens saved during a coffee break or an off-the-record aside.
+ */
+app.post(
+  '/api/meetings/:id/pause',
+  wrap(async (req, res) => {
+    const id = req.params.id!;
+    const meta = await store.readMeta(id);
+    const at = await store.recordedSeconds(id);
+    const updated = await store.patchMeta(id, {
+      status: 'paused',
+      pauses: [...(meta.pauses ?? []), { at }],
+    });
+    res.json(updated);
+  }),
+);
+
+app.post(
+  '/api/meetings/:id/resume',
+  wrap(async (req, res) => {
+    const meta = await store.patchMeta(req.params.id!, { status: 'recording' });
     res.json(meta);
   }),
 );
@@ -223,6 +279,47 @@ app.get(
   }),
 );
 
+/**
+ * A few seconds of audio around a timestamp.
+ *
+ * Every quote in the minutes carries the time it was said, so this is what
+ * turns the evidence layer from "trust the translation" into "listen to it".
+ * Serves a small standalone WAV rather than a range of the full recording, so
+ * a phone fetches kilobytes instead of a couple of hundred megabytes.
+ */
+app.get(
+  '/api/meetings/:id/clip',
+  wrap(async (req, res) => {
+    const id = req.params.id!;
+    const at = Number(req.query.at);
+    if (!Number.isFinite(at) || at < 0) {
+      return res.status(400).json({ error: 'A valid ?at= position in seconds is required' });
+    }
+    // Start slightly before the quote: people rarely remember the exact moment,
+    // and the run-up is usually what makes it make sense.
+    const pad = Math.min(30, Math.max(2, Number(req.query.pad) || 6));
+    const from = Math.max(0, at - pad);
+    const to = at + pad;
+    const startByte = secondsToByteOffset(from);
+    const endByte = secondsToByteOffset(to);
+
+    let pcm: Buffer | null = null;
+    if ((await store.pcmSize(id)) > 0) {
+      pcm = await store.readPcmRange(id, startByte, endByte);
+    } else if (gcs.enabled() && (await gcs.audioExists(id))) {
+      pcm = await gcs.readAudioRange(id, startByte, endByte);
+    }
+
+    if (!pcm || pcm.length === 0) {
+      return res.status(404).json({ error: 'The recording is no longer available' });
+    }
+
+    res.setHeader('Content-Type', 'audio/wav');
+    res.setHeader('Cache-Control', 'private, max-age=3600');
+    res.send(pcmToWav(pcm));
+  }),
+);
+
 app.delete(
   '/api/meetings/:id/audio',
   wrap(async (req, res) => {
@@ -245,7 +342,62 @@ app.delete(
 
 /* ------------------------------------------------------------ pipeline --- */
 
+/**
+ * Which meetings this process is actively working on.
+ *
+ * Needed because the post-meeting pipeline outlives the request that started
+ * it, and on Cloud Run an instance can be reclaimed once traffic stops. If that
+ * happens mid-transcription the meeting would sit at "transcribing" forever
+ * with nothing running. Instead any request touching a meeting whose status
+ * claims work is in progress -- including the client's own status poll --
+ * restarts it. Every stage reads its inputs from disk and rewrites its outputs,
+ * so restarting is safe and simply redoes the stage.
+ */
+const running = new Set<string>();
+
+/**
+ * Copy the meeting's documents to Cloud Storage if one is configured. Never
+ * fatal: a meeting that exists locally but failed to archive is still a
+ * meeting, and the user should not lose a draft to a bucket permission error.
+ */
+/**
+ * Make sure the recording is in Cloud Storage before the local copy is dropped.
+ * Single-pass transcription already uploaded it; the segmented path did not.
+ */
+async function ensureAudioArchived(id: string): Promise<void> {
+  try {
+    if (await gcs.audioExists(id)) return;
+    const size = await store.pcmSize(id);
+    if (size === 0) return;
+    const pcm = await store.readPcmRange(id, 0, size);
+    await gcs.uploadAudio(id, pcmToWav(pcm));
+  } catch (err) {
+    console.warn(`[archive] could not retain audio for ${id}:`, err);
+  }
+}
+
+async function archive(id: string): Promise<void> {
+  if (!gcs.enabled()) return;
+  try {
+    await gcs.archiveMeeting(id, store.meetingDir(id));
+  } catch (err) {
+    console.warn(`[archive] could not archive ${id}:`, err);
+  }
+}
+
+function resumeIfStalled(meta: MeetingMeta): void {
+  if (running.has(meta.id)) return;
+  if (meta.status === 'transcribing' || meta.status === 'identifying') {
+    console.warn(`[pipeline] resuming interrupted transcription for ${meta.id}`);
+    void runTranscription(meta.id);
+  } else if (meta.status === 'drafting') {
+    console.warn(`[pipeline] resuming interrupted drafting for ${meta.id}`);
+    void runDrafting(meta.id);
+  }
+}
+
 async function runTranscription(id: string): Promise<void> {
+  running.add(id);
   try {
     const meta = await store.readMeta(id);
 
@@ -255,17 +407,54 @@ async function runTranscription(id: string): Promise<void> {
     await store.writeTranscript(id, transcript);
 
     await store.setStatus(id, 'identifying', 'Identifying who said what');
-    const speakers = await identifySpeakers(transcript, meta.expectedAttendees);
+    const speakers = await identifySpeakers(
+      transcript,
+      meta.expectedAttendees,
+      meta.rollCallEndedAt,
+    );
     await store.writeSpeakers(id, speakers);
 
-    await store.setStatus(id, 'awaiting_speakers', 'Confirm the attendee names');
+    /**
+     * Only stop for a human when there is actually something to decide.
+     *
+     * The reason this checkpoint exists is that a name attached to the wrong
+     * resolution is the worst thing this app can produce. But that risk lives
+     * entirely in the uncertain cases -- an unnamed voice, or a name the model
+     * inferred rather than heard. When every speaker introduced themselves and
+     * was matched confidently, stopping to ask adds nothing except a step
+     * between the chair and their minutes.
+     *
+     * Anything uncertain still reaches the reader: it is raised in the minutes'
+     * own "to verify before sign-off" list either way.
+     */
+    const uncertain = speakers.filter((sp) => !sp.name || sp.confidence === 'low');
+
+    if (uncertain.length === 0 && speakers.length > 0) {
+      console.log(`[pipeline] all ${speakers.length} speakers identified; drafting`);
+      await store.setStatus(id, 'drafting', 'Drafting minutes');
+      await archive(id);
+      await runDrafting(id);
+      return;
+    }
+
+    await store.setStatus(
+      id,
+      'awaiting_speakers',
+      uncertain.length === 1
+        ? '1 speaker needs a name'
+        : `${uncertain.length} speakers need names`,
+    );
+    await archive(id);
   } catch (err) {
     console.error(`[pipeline] transcription failed for ${id}:`, err);
     await store.fail(id, err);
+  } finally {
+    running.delete(id);
   }
 }
 
 async function runDrafting(id: string): Promise<void> {
+  running.add(id);
   try {
     const meta = await store.readMeta(id);
     const speakers = await store.readSpeakers(id);
@@ -275,15 +464,27 @@ async function runDrafting(id: string): Promise<void> {
     const minutes = await draftMinutes(meta, named, speakers);
     await store.writeMinutes(id, minutes, renderMarkdown(minutes));
 
-    // The recording has served its purpose. Keeping voice recordings of
-    // colleagues around by default is not a decision to make silently.
+    // What happens to the recording now is a deliberate choice, not a default.
+    // With retention off it goes immediately and the app can honestly say the
+    // recording does not survive. With retention on it is kept in Cloud Storage
+    // so a disputed minute can be settled by listening -- and a bucket
+    // lifecycle rule deletes it on schedule rather than never.
+    if (config.retainAudioDays > 0 && gcs.enabled()) {
+      await ensureAudioArchived(id);
+    } else {
+      await gcs.deleteAudio(id).catch(() => {});
+    }
+    // The instance's local copy always goes: the disk is ephemeral anyway, and
+    // Cloud Storage is now the only durable home.
     await store.deleteAudio(id);
-    await gcs.deleteAudio(id).catch(() => {});
 
     await store.setStatus(id, 'complete');
+    await archive(id);
   } catch (err) {
     console.error(`[pipeline] drafting failed for ${id}:`, err);
     await store.fail(id, err);
+  } finally {
+    running.delete(id);
   }
 }
 
@@ -292,9 +493,7 @@ async function runDrafting(id: string): Promise<void> {
 const server = http.createServer(app);
 const wss = new WebSocketServer({ server, path: '/ws' });
 
-/** ~20 seconds of audio before we send a chunk off for a live transcription. */
-const CHUNK_SECONDS = 20;
-const CHUNK_BYTES = CHUNK_SECONDS * bytesPerSecond;
+// Chunk sizing lives in config.ts so it can be tested without booting a server.
 
 wss.on('connection', (ws: WebSocket, req) => {
   const url = new URL(req.url ?? '/', 'http://localhost');
@@ -316,6 +515,100 @@ wss.on('connection', (ws: WebSocket, req) => {
   /** Serialises live transcriptions so chunks come back in order. */
   let liveQueue: Promise<void> = Promise.resolve();
 
+  // Roll-call state. The phase ends by itself; the button is only a shortcut.
+  let rollCallText: string[] = [];
+  let rollCallChecking = false;
+  let rollCallDone = false;
+
+  /**
+   * Watch the opening of the meeting and move on once the introductions have
+   * clearly finished, so nobody has to press anything mid-roll-call.
+   */
+  const maybeEndRollCall = async (nowSeconds: number) => {
+    if (rollCallDone || rollCallChecking || rollCallText.length === 0) return;
+
+    const meta = await store.readMeta(meetingId).catch(() => null);
+    if (!meta || meta.status !== 'roll_call') {
+      rollCallDone = meta?.status !== 'roll_call';
+      return;
+    }
+
+    // Hard stop. If the check keeps saying "not yet" -- a rambling chair, a
+    // transcript too poor to read -- the meeting still has to start, and the
+    // identification step works from the whole recording regardless.
+    const overrun = nowSeconds >= config.rollCall.maxSeconds;
+
+    rollCallChecking = true;
+    try {
+      const verdict = overrun
+        ? { finished: true, namesHeard: [], reason: 'time limit reached' }
+        : await checkRollCall(rollCallText.join('\n'), meta.expectedAttendees);
+
+      if (!verdict.finished) return;
+
+      rollCallDone = true;
+      const updated = await store.patchMeta(meetingId, {
+        status: 'recording',
+        rollCallEndedAt: nowSeconds,
+      });
+      console.log(
+        `[roll-call] ended at ${nowSeconds.toFixed(0)}s (${verdict.reason}); heard: ${
+          verdict.namesHeard.join(', ') || 'nobody'
+        }`,
+      );
+      send({ type: 'roll_call_ended', at: nowSeconds, namesHeard: verdict.namesHeard });
+      void updated;
+    } catch (err) {
+      // Never let this block the meeting. Worst case the chair taps the button.
+      console.warn('[roll-call] check failed:', err);
+    } finally {
+      rollCallChecking = false;
+    }
+  };
+
+  // Rolling summary state.
+  let digestBuffer: string[] = [];
+  let digestFrom = 0;
+  let digestHeadings: string[] = [];
+  let digestRunning = false;
+
+  /**
+   * Fold everything transcribed since the last block into a summary block.
+   * Runs off the live transcript rather than the audio, so it costs almost
+   * nothing on top of a pass that was happening anyway.
+   */
+  const maybeDigest = async (nowSeconds: number, force = false) => {
+    if (digestRunning || digestBuffer.length === 0) return;
+    const elapsed = nowSeconds - digestFrom;
+    if (!force && elapsed < config.digestIntervalSeconds) return;
+    // A forced flush of a few seconds of speech is not worth a summary block.
+    if (force && elapsed < 45) return;
+
+    digestRunning = true;
+    const text = digestBuffer.join('\n');
+    const from = digestFrom;
+    digestBuffer = [];
+    digestFrom = nowSeconds;
+
+    try {
+      const block = await buildDigest({
+        text,
+        recentHeadings: digestHeadings.slice(-3),
+        fromSeconds: from,
+        toSeconds: nowSeconds,
+      });
+      digestHeadings.push(block.heading);
+      await store.appendDigest(meetingId, block);
+      send({ type: 'digest', block });
+    } catch (err) {
+      // The summary is a convenience. Losing a block must never affect the
+      // recording or the minutes, both of which come from other sources.
+      console.warn('[digest] block failed:', err);
+    } finally {
+      digestRunning = false;
+    }
+  };
+
   store
     .readMeta(meetingId)
     .then(() => send({ type: 'ready', meetingId }))
@@ -333,7 +626,7 @@ wss.on('connection', (ws: WebSocket, req) => {
         const seconds = await store.recordedSeconds(meetingId);
         send({ type: 'chunk_ack', index: chunkIndex, seconds });
 
-        if (pendingBytes < CHUNK_BYTES) return;
+        if (pendingBytes < liveChunkBytes(seconds)) return;
 
         const chunk = Buffer.concat(pending);
         const endsAt = seconds;
@@ -349,6 +642,12 @@ wss.on('connection', (ws: WebSocket, req) => {
             tail = text.slice(-240);
             await store.appendLive(meetingId, { start: startsAt, end: endsAt, text });
             send({ type: 'live', start: startsAt, end: endsAt, text });
+
+            rollCallText.push(text);
+            void maybeEndRollCall(endsAt);
+
+            digestBuffer.push(text);
+            void maybeDigest(endsAt);
           } catch (err) {
             // A failed live chunk is cosmetic -- the audio is already safe on
             // disk and the real transcript is built from that at the end.
@@ -363,11 +662,17 @@ wss.on('connection', (ws: WebSocket, req) => {
   });
 
   ws.on('close', () => {
-    // Nothing to salvage: every frame was written to disk the moment it
-    // arrived. `pending` only buffers toward the next live transcription, which
-    // is disposable -- the real transcript comes from the file.
+    // Nothing to salvage from the audio: every frame was written to disk the
+    // moment it arrived. `pending` only buffers toward the next live
+    // transcription, which is disposable -- the real transcript comes from the
+    // file. But flush the trailing summary block so the last stretch of the
+    // meeting is not missing from the scrollback.
     pending = [];
     pendingBytes = 0;
+    void store
+      .recordedSeconds(meetingId)
+      .then((seconds) => maybeDigest(seconds, true))
+      .catch(() => {});
   });
 });
 
@@ -415,6 +720,23 @@ function formatTimestamp(seconds: number): string {
 }
 
 fs.mkdirSync(path.join(config.dataDir, 'meetings'), { recursive: true });
+
+// Cloud Run reclaims the instance -- and its disk -- whenever traffic stops, so
+// past meetings are restored from Cloud Storage before anything else. Then pick
+// up any pipeline a previous instance was killed in the middle of, rather than
+// leaving a meeting stuck reporting progress nothing is making.
+void (async () => {
+  try {
+    if (gcs.enabled()) {
+      const restored = await gcs.restoreArchive(store.meetingsRoot());
+      if (restored > 0) console.log(`[boot] restored ${restored} archived file(s)`);
+    }
+    const all = await store.listMeetings();
+    all.forEach(resumeIfStalled);
+  } catch (err) {
+    console.warn('[boot] archive restore / stall scan failed:', err);
+  }
+})();
 
 server.listen(config.port, () => {
   console.log(`minutes server on :${config.port}`);

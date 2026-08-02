@@ -1,6 +1,8 @@
 export type MeetingStatus =
   | 'setup'
+  | 'roll_call'
   | 'recording'
+  | 'paused'
   | 'transcribing'
   | 'identifying'
   | 'awaiting_speakers'
@@ -16,6 +18,10 @@ export interface MeetingMeta {
   date: string;
   startedAt?: string;
   endedAt?: string;
+  /** Position in the recording, in seconds, where the roll call ended. */
+  rollCallEndedAt?: number;
+  /** Where recording was paused, in recording-seconds. */
+  pauses: Array<{ at: number; label?: string }>;
   chair?: string;
   secretary?: string;
   expectedAttendees: string[];
@@ -50,6 +56,21 @@ export interface LiveLine {
   start: number;
   end: number;
   text: string;
+}
+
+/**
+ * A rolling summary block produced every few minutes during the meeting. This
+ * is what makes an hour-old discussion reviewable in the room — a dozen
+ * timestamped topics can be scanned, an hour of raw transcript cannot.
+ */
+export interface DigestBlock {
+  start: number;
+  end: number;
+  heading: string;
+  bullets: string[];
+  /** Provisional — heard mid-discussion, before the outcome was known. */
+  decisions: string[];
+  continuesPrevious: boolean;
 }
 
 export interface Evidence {
@@ -117,6 +138,7 @@ export interface MeetingSnapshot {
   minutes: Minutes | null;
   markdown: string | null;
   live: LiveLine[];
+  digest: DigestBlock[];
   audioSeconds: number;
   audioAvailable: boolean;
 }

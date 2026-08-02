@@ -10,35 +10,94 @@ Runs entirely in your own Google Cloud project.
 
 ---
 
+## What you actually do
+
+**Press start. Press stop.** Everything between is automatic.
+
+```
+  you                        the app
+  ───                        ───────
+  press Start        ──►     records; prompts the room to introduce themselves
+                             detects when the introductions finish, moves on
+                             transcribes in the background
+                             posts a summary block every ~5 min
+  (glance at the                 you can scroll back through it any time
+   summary if you                 or search the raw transcript
+   want to)                   you can Pause and Resume for a break
+
+  press Stop         ──►     transcribes the whole recording with speakers
+                             maps the voices to the names from the roll call
+                             drafts the formal minutes
+                             ── only stops to ask if a voice went unidentified
+
+  read the minutes
+```
+
+The only interruption that survives is the one that earns its place: if a voice
+was never named, or a name was inferred rather than heard, it stops and asks.
+When everyone introduced themselves properly it goes straight through.
+
 ## How it works
 
 ```
 phone mic
    │  16 kHz mono PCM, streamed over a websocket
    ▼
-server ──► every 20s ──► Gemini ──► rough live transcript (on screen, disposable)
-   │
-   │  full recording on disk
+server ──► 20s chunks (60s after the mic check) ──► Gemini ──► live transcript
+   │                                                              │
+   │                                                              ▼
+   │                                        every ~5 min ──► summary block
+   │  full recording accumulating on disk
    ▼
 on Stop ──► Gemini ──► verbatim diarized transcript, Cantonese in 口語
               │
-              ├──► speaker names, from the roll-call at the start
-              │      └──► YOU CONFIRM THEM  ◄── the one human checkpoint
+              ├──► voices matched to names using the roll call
+              │      └──► asks you only if something is uncertain
               │
               └──► Gemini ──► formal English minutes, every claim timestamped
-                                └──► audio deleted
+                                └──► audio retained 30 days for playback
 ```
 
-Two passes, and the reason is a hard constraint rather than a design
-preference. Chirp 3 on Vertex supports streaming, and supports speaker
-diarization, but [not at the same time](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)
-— diarization is `BatchRecognize`/`Recognize` only. Since knowing who said what
-is the whole point of minutes, the authoritative transcript has to come from the
-complete recording at the end. The live pass exists only so you can see the mic
-is working while there is still time to move it.
+## How the app knows who is speaking
 
-Gemini rather than a dedicated speech engine, because dedicated engines are
-trained one language at a time and mangle code-switching. `我哋個 budget 已經
+This is the part that surprises people, so it is worth being precise.
+
+**It does not happen live.** The 20s and 60s chunks are transcribed
+independently and carry no speaker identity — a chunk at 01:00:00 has no idea
+what a chunk at 00:00:30 heard. Chunked audio fundamentally cannot do this.
+
+**It happens once, at the end, over the whole recording in a single request.**
+That is the entire reason the authoritative transcript is built from the
+complete file rather than assembled from the live fragments. In that one
+request the model hears the roll call at 00:00:30 *and* the voice at 01:00:00,
+and can tell they are the same person. Two steps:
+
+1. **Diarization — acoustic.** The model separates the voices and labels them
+   `Speaker 1`, `Speaker 2`, `Speaker 3`, consistently from the first minute to
+   the last. This is voice similarity. It knows nothing about names.
+2. **Name mapping — textual.** A second, text-only pass reads that transcript,
+   finds `Speaker 2: 我係 Cheryl，負責 finance` at 00:00:30, and maps Speaker 2
+   to Cheryl everywhere — including at 01:00:00. It also picks up names from how
+   people address each other (`Raymond 你點睇?` followed by an answer).
+
+**There is no magic phrase.** Anything that reads as a self-introduction works:
+`我係 Raymond` · `Hi, I'm Cheryl` · `Peter here, operations` · `我叫陳大文`.
+Marking where the roll call ended just tells step 2 where to look hardest.
+
+**The one thing that weakens it:** without a `GCS_BUCKET`, long recordings are
+transcribed in 8-minute segments, and speaker labels drift across the seams.
+Known labels are carried forward to limit it, but single-pass is materially
+better. For meetings over about 40 minutes, configure the bucket.
+
+Worth noting that a dedicated speech engine cannot rescue this either. Chirp 3
+on Vertex supports streaming, and supports diarization, but
+[not at the same time](https://docs.cloud.google.com/speech-to-text/docs/models/chirp-3)
+— diarization is `BatchRecognize`/`Recognize` only. There is no configuration of
+any of this that gives you live speaker labels.
+
+## Why Gemini rather than a speech engine
+
+Dedicated engines are trained one language at a time and mangle code-switching. `我哋個 budget 已經
 approve 咗` is one sentence to a multimodal model and two broken ones to an ASR
 pipeline.
 
@@ -54,7 +113,8 @@ pipeline.
   actions with owner and due date
 - Anchor every resolution and action to a timestamp and a verbatim quote
 - Flag what it could not establish, instead of smoothing it into confident prose
-- Delete the audio once the minutes are drafted
+- Let you play back the audio behind any quote, for 30 days
+- Pause and resume, releasing the mic so the room can see it has stopped
 
 **Will not**
 
@@ -62,6 +122,8 @@ pipeline.
   which is biometric data with its own legal weight class. Deliberately absent.
 - Name someone who never introduced themselves and is never addressed by name.
   They appear as "an unidentified attendee" and get flagged.
+- Attribute speakers in the live transcript. That only becomes possible once the
+  whole recording can be heard at once — see above.
 - Produce a signed record. It produces a draft that a human approves.
 
 ## Setup
@@ -122,8 +184,9 @@ The model is not the bottleneck. In order of impact:
    conference puck will do more for your minutes than any prompt engineering.
 2. **Fill in the attendee list** before you start. It turns name identification
    from a guessing problem into a matching problem, and fixes spelling.
-3. **Do the roll-call.** Everyone says their own name at the start. Anyone who
-   skips it, or arrives late, will not be named.
+3. **Do the roll call.** The app prompts for it and moves on by itself when the
+   introductions stop. Anyone who skips it, or arrives late, will not be named —
+   though they can still say their name aloud at any point.
 4. **Watch the live transcript for the first minute.** If the person at the far
    end never appears, move the phone. This is the entire reason the live pass
    exists.
@@ -150,22 +213,121 @@ Auto-Lock → Never**, and do not switch apps.
 `./deploy.sh` deploys with `--allow-unauthenticated`. The URL is unguessable but
 public — put IAP in front of it before it holds anything sensitive.
 
+## Where everything is stored
+
+One directory per meeting — a meeting is a folder you can zip, inspect or
+delete, which is the right shape for recordings of real people.
+
+```
+data/meetings/<meeting-id>/
+  meta.json          title, attendees, agenda, status, pause marks
+  audio.pcm          raw 16 kHz mono PCM, deleted after drafting
+  live.jsonl         the rough live transcript, one line per chunk
+  digest.jsonl       the rolling summary blocks
+  transcript.json    the verbatim diarized transcript (口語 Cantonese)
+  speakers.json      voice → name mapping, with the evidence for each
+  minutes.json       the structured minutes
+  minutes.md         the rendered document
+```
+
+Locally that is `./data`. On Cloud Run it is the instance's disk, **which does
+not survive the instance** — and with scale-to-zero the instance is reclaimed
+between meetings. So with a bucket configured, every document above is mirrored
+to `gs://<bucket>/meetings/<id>/` when a stage completes, and restored at boot.
+That is what makes scale-to-zero safe rather than lossy.
+
+**Without a bucket, run it locally**, or past meetings will disappear.
+
+The recording itself lives at `gs://<bucket>/meetings/<id>/audio.wav` and is
+deleted by a bucket lifecycle rule after `RETAIN_AUDIO_DAYS` (30 by default).
+Retention is enforced by the bucket, not by application code — a deletion that
+depends on the app remembering to run is a deletion that eventually does not
+happen, and this object is a recording of people's voices.
+
+Set `RETAIN_AUDIO_DAYS=0` to delete it as soon as the minutes exist. The consent
+announcement on the pre-flight screen changes to match, so it never tells the
+room something untrue.
+
+## Playing back the evidence
+
+Every resolution, motion, action and reported figure carries a timestamp and the
+verbatim quote in the language spoken. While the recording is retained, each of
+those quotes has a play button that fetches a few seconds of audio around the
+moment.
+
+That matters because the minutes are in English and the meeting was not. The
+English is a translation nobody can check from the page. With the quote you can
+check the words; with the audio you can check the quote.
+
+## Pausing
+
+Pause releases the microphone rather than muting the upload, so the phone's
+recording indicator goes out and the room can see it has actually stopped —
+during a break or an off-the-record aside that matters more than the tokens
+saved. Paused time does not exist in the recording, so the timeline compresses;
+the pause positions are kept in `meta.json` so a gap is visible rather than two
+conversations being silently spliced together.
+
+## The live transcript
+
+It has two jobs, and the second one is easy to overlook.
+
+1. **Mic check.** In the first minute you find out whether the person at the far
+   end of the table is being picked up, while you can still move the phone.
+2. **Scrollback.** At 01:30 you want to check what was said at 00:30. That is a
+   real in-meeting need, and the final transcript does not exist yet.
+
+For (2), scrolling an hour of raw transcript does not actually work — you have
+to already know what word to search for. So every five minutes the live
+transcript is folded into a **summary block**: a topic heading, two to four
+bullets, and any decision that was actually reached. A two hour meeting becomes
+about twenty scannable blocks, which is the default view. The raw transcript
+sits behind a tab with a search box.
+
+Those blocks are deliberately kept out of the minutes pipeline. They are formed
+mid-discussion, before the outcome is known; the minutes are drafted
+independently from the complete transcript.
+
+Because of (1) the chunks start short and get longer. Every chunk re-sends the
+same language rules, so at 20s the prompt overhead is nearly half the input
+tokens. Ramping to 60s after three minutes takes a 2 hour meeting from 360 model
+calls to 126, with no gap in coverage and arguably better rewind granularity —
+fewer, more coherent blocks.
+
 ## Cost
 
-Roughly, for a 60-minute meeting on `gemini-3.6-flash`
+For a **2-hour meeting** on `gemini-3.6-flash`
 ([$1.50 / $7.50 per 1M tokens](https://evolink.ai/blog/gemini-3-6-flash-release-date)),
 audio being ~32 tokens/second:
 
 | Stage | Notes | Approx |
 | --- | --- | --- |
-| Live pass | 180 × 20s chunks | $0.20 |
-| Full transcript | 115k audio tokens in, long transcript out | $0.35 |
-| Speaker ID | text only | $0.02 |
-| Minutes | transcript in, document out | $0.10 |
-| | | **~$0.70** |
+| Live pass | 126 chunks after the ramp | $0.66 |
+| Full transcript | 230k audio tokens in, long transcript out | $0.57 |
+| Rolling summary | ~24 blocks, text only | $0.10 |
+| Roll call detection | a few short text calls | $0.01 |
+| Speaker ID | text only | $0.03 |
+| Minutes | transcript in, document out | $0.09 |
+| | | **~$1.45** |
 
-Plus Cloud Run at `--min-instances 1`, around $10–15/month. Drop it to 0 if you
-can tolerate a cold start before a meeting.
+Halve it for a one-hour meeting. Without the chunk ramp the live pass alone
+would be $0.85.
+
+The remaining lever is `MODEL_LIVE=gemini-3.5-flash-lite`
+([$0.30 / $2.50](https://www.metacto.com/blogs/the-true-cost-of-google-gemini-a-guide-to-api-pricing-and-integration)),
+which takes the live pass to about $0.16 and the total to **~$0.85**. The
+authoritative transcript still runs on `MODEL_TRANSCRIBE`, so the only thing at
+risk is how readable the on-screen scrollback is. Worth testing on a real
+meeting rather than assuming.
+
+Context caching would be the obvious fix for the repeated prompt —
+[cache reads are 10% of base input](https://cloud.google.com/blog/products/ai-machine-learning/vertex-ai-context-caching)
+— but the repeated block here is only ~450 tokens, below the usual minimum
+cacheable size. Not counted above.
+
+Cloud Run scales to zero between meetings, so it costs nothing while idle —
+expect a few seconds of cold start when you press record. Storage for a retained
+two-hour recording is about half a cent a month.
 
 ## Models
 
@@ -215,12 +377,17 @@ Neither suite touches Vertex, so both run without credentials.
 
 ## Known limits
 
-- **One meeting at a time per instance.** Audio streams to instance-local disk,
-  so `deploy.sh` pins `--max-instances 1` with session affinity. Fine for one
-  person; needs GCS-backed streaming for a team.
-- **Cloud Run's disk is ephemeral.** Past meetings vanish when the instance
-  recycles. Set `GCS_BUCKET`, mount a volume, or run it locally if you need an
-  archive.
+- **One meeting at a time.** Not a code limit — the server is per-meeting-id
+  throughout and two concurrent meetings would work on one instance. The cap is
+  `--max-instances 1`, because audio streams to instance-local disk and a second
+  instance could not see the first's recording. Lifting it means streaming audio
+  to Cloud Storage instead.
+- **Reloading the page mid-meeting loses the session.** The recording on the
+  server is safe, but the browser cannot re-attach to it; you would need to stop
+  and start a new one.
+- **Cloud Run cuts a request at 60 minutes**, and a websocket is one request. A
+  longer meeting sees a reconnect on the hour — the client buffers across it, so
+  no audio is lost, but you will see the status pill flicker.
 - **The queue is capped at ~5 minutes** of buffered audio when the connection
   drops. Longer than that and the oldest audio is discarded rather than killing
   the tab.

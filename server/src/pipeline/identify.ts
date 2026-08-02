@@ -19,6 +19,7 @@ interface RawSpeakers {
 export async function identifySpeakers(
   transcript: TranscriptSegment[],
   expectedAttendees: string[],
+  rollCallEndedAt?: number,
 ): Promise<SpeakerIdentification[]> {
   const counts = new Map<string, number>();
   for (const s of transcript) {
@@ -26,10 +27,13 @@ export async function identifySpeakers(
   }
   if (counts.size === 0) return [];
 
-  // The roll-call is at the start, but names get used all the way through, so
+  // The roll call is at the start, but names get used all the way through, so
   // send the opening in full plus a sample of the rest rather than truncating.
-  const opening = transcript.filter((s) => s.start <= 240);
-  const rest = transcript.filter((s) => s.start > 240);
+  // When the chair marked the end of the roll call we know exactly how much of
+  // the opening matters; otherwise fall back to the first few minutes.
+  const openingEnds = rollCallEndedAt ? rollCallEndedAt + 60 : 240;
+  const opening = transcript.filter((s) => s.start <= openingEnds);
+  const rest = transcript.filter((s) => s.start > openingEnds);
   const sampled = rest.length > 400 ? everyNth(rest, Math.ceil(rest.length / 400)) : rest;
 
   const result = await generateJson<RawSpeakers>({

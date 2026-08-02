@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { api } from '../lib/api';
 import { listMicrophones } from '../lib/recorder';
 import { isIOS, ScreenLockGuard } from '../lib/wakeLock';
 import type { MeetingMeta } from '../types';
@@ -20,6 +21,18 @@ export default function Preflight({ meta, starting, error, onStart, onBack }: Pr
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [announced, setAnnounced] = useState(false);
+  const [retainDays, setRetainDays] = useState<number | null>(null);
+
+  // The announcement has to describe what actually happens to the recording,
+  // which depends on how this deployment is configured. Saying "deleted
+  // afterwards" while a bucket quietly keeps it for a month would make the
+  // consent worthless.
+  useEffect(() => {
+    void api
+      .health()
+      .then((h) => setRetainDays(h.retainAudioDays ?? 0))
+      .catch(() => setRetainDays(null));
+  }, []);
 
   useEffect(() => {
     // Labels only populate after permission has been granted once, so an
@@ -45,8 +58,13 @@ export default function Preflight({ meta, starting, error, onStart, onBack }: Pr
         <div className="field">
           <label>Say this before you start</label>
           <p style={{ fontSize: 17, lineHeight: 1.6, fontFamily: 'var(--font-doc)' }}>
-            “I’m recording this meeting to draft the minutes. The recording is
-            deleted once the minutes are written. Any objections?”
+            “I’m recording this meeting to draft the minutes.{' '}
+            {retainDays === null
+              ? 'The recording is kept only as long as it is needed.'
+              : retainDays > 0
+                ? `The recording is kept for ${retainDays} days so we can check anything that’s disputed, then deleted automatically.`
+                : 'The recording is deleted as soon as the minutes are written.'}{' '}
+            Any objections?”
           </p>
           <p className="hint">
             Recording people without telling them is a bad idea generally, and

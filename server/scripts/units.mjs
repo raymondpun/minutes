@@ -10,6 +10,7 @@ const { pcmToWav, pcmDurationSeconds, secondsToByteOffset } = await import(
   '../dist/wav.js'
 );
 const { renderMarkdown } = await import('../dist/pipeline/minutes.js');
+const { liveChunkBytes } = await import('../dist/config.js');
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -47,7 +48,31 @@ console.log('\n2. Segment offsets land on sample boundaries');
   check('8 minutes is 15,360,000 bytes', secondsToByteOffset(480) === 15_360_000);
 }
 
-console.log('\n3. Formal minutes rendering');
+console.log('\n3. Live chunk ramp');
+{
+  const PER_SECOND = 32_000; // 16 kHz mono 16-bit
+  check('20s chunks at the start', liveChunkBytes(0) === 20 * PER_SECOND);
+  check('still 20s at 2:59', liveChunkBytes(179) === 20 * PER_SECOND);
+  check('60s chunks from 3:00', liveChunkBytes(180) === 60 * PER_SECOND);
+  check('still 60s two hours in', liveChunkBytes(7200) === 60 * PER_SECOND);
+
+  // The live pass is most of the bill, so the saving the ramp buys is worth
+  // asserting rather than assuming.
+  const flat = Math.ceil(7200 / 20);
+  const ramped = Math.ceil(180 / 20) + Math.ceil((7200 - 180) / 60);
+  check(
+    'a 2h meeting drops from 360 to 126 live calls',
+    flat === 360 && ramped === 126,
+    `${flat} -> ${ramped}`,
+  );
+  check(
+    'scrollback still covers the whole meeting',
+    ramped * 60 >= 7200 - 180,
+    'no gap in coverage',
+  );
+}
+
+console.log('\n4. Formal minutes rendering');
 {
   const minutes = {
     bodyName: 'Board of Directors',
@@ -138,7 +163,7 @@ console.log('\n3. Formal minutes rendering');
   check('draft disclaimer', md.includes('Not a signed record until approved'));
 }
 
-console.log('\n4. Renderer survives a sparse model response');
+console.log('\n5. Renderer survives a sparse model response');
 {
   const md = renderMarkdown({
     bodyName: 'Team',

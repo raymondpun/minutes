@@ -5,10 +5,11 @@ import { Uplink } from './lib/uplink';
 import { ScreenLockGuard } from './lib/wakeLock';
 import Setup from './screens/Setup';
 import Preflight from './screens/Preflight';
-import Recording from './screens/Recording';
+import Recording, { type Phase } from './screens/Recording';
 import Speakers from './screens/Speakers';
 import MinutesView from './screens/MinutesView';
 import type {
+  DigestBlock,
   LiveLine,
   MeetingMeta,
   MeetingSnapshot,
@@ -30,6 +31,9 @@ export default function App() {
   const [level, setLevel] = useState(0);
   const [connected, setConnected] = useState(false);
   const [liveLines, setLiveLines] = useState<LiveLine[]>([]);
+  const [digest, setDigest] = useState<DigestBlock[]>([]);
+  const [phase, setPhase] = useState<Phase>('roll_call');
+  const [namesHeard, setNamesHeard] = useState<string[]>([]);
   const [pendingBytes, setPendingBytes] = useState(0);
   const [deviceLabel, setDeviceLabel] = useState('');
   const [wakeLockHeld, setWakeLockHeld] = useState(false);
@@ -39,6 +43,9 @@ export default function App() {
   const uplinkRef = useRef<Uplink | null>(null);
   const wakeLockRef = useRef<ScreenLockGuard | null>(null);
   const startedAtRef = useRef<number>(0);
+  const deviceIdRef = useRef<string | undefined>(undefined);
+  /** Recorded seconds at the moment of the last pause, so the timer freezes. */
+  const recordedBeforePauseRef = useRef(0);
 
   /* ------------------------------------------------------------- home --- */
 
@@ -82,6 +89,13 @@ export default function App() {
       // five minutes.
       const uplink = new Uplink(meta.id, {
         onLive: (line) => setLiveLines((prev) => [...prev, line]),
+        onDigest: (block) => setDigest((prev) => [...prev, block]),
+        // The server decides when the introductions have finished, so the chair
+        // never has to press anything mid-roll-call.
+        onRollCallEnded: (namesHeard) => {
+          setNamesHeard(namesHeard);
+          setPhase('recording');
+        },
         onSecondsRecorded: (seconds) => setElapsed(seconds),
         onConnectionChange: setConnected,
       });
@@ -107,10 +121,15 @@ export default function App() {
       wakeLockRef.current = guard;
       setWakeLockHeld(await guard.acquire());
 
+      deviceIdRef.current = deviceId;
       await api.startMeeting(meta.id);
       startedAtRef.current = Date.now();
+      recordedBeforePauseRef.current = 0;
       setElapsed(0);
       setLiveLines([]);
+      setDigest([]);
+      setNamesHeard([]);
+      setPhase('roll_call');
       setView('recording');
     } catch (err) {
       setError(micErrorMessage(err));
@@ -124,16 +143,17 @@ export default function App() {
   // only updates when a chunk lands. Tick locally in between so the timer does
   // not look frozen if the connection drops.
   useEffect(() => {
-    if (view !== 'recording') return;
+    if (view !== 'recording' || phase === 'paused') return;
     const id = window.setInterval(() => {
       setElapsed((prev) => {
-        const wall = (Date.now() - startedAtRef.current) / 1000;
+        const wall =
+          recordedBeforePauseRef.current + (Date.now() - startedAtRef.current) / 1000;
         return Math.max(prev, wall);
       });
       setPendingBytes(uplinkRef.current?.pendingBytes ?? 0);
     }, 1000);
     return () => window.clearInterval(id);
-  }, [view]);
+  }, [view, phase]);
 
   // A meeting in progress must survive a stray back-swipe or tab close.
   useEffect(() => {
@@ -151,6 +171,78 @@ export default function App() {
     recorderRef.current = null;
     await wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
+  };
+
+  const finishRollCall = async () => {
+    if (!meta) return;
+    setBusy(true);
+    try {
+      await api.rollCallDone(meta.id);
+      setPhase('recording');
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  /**
+   * Pause releases the microphone rather than just muting the upload. The
+   * phone's recording indicator goes out, so the room can see it has actually
+   * stopped listening -- during a break or an off-the-record aside that matters
+   * more than the tokens saved.
+   */
+  const pauseRecording = async () => {
+    if (!meta) return;
+    setBusy(true);
+    try {
+      await recorderRef.current?.stop().catch(() => {});
+      recorderRef.current = null;
+      await uplinkRef.current?.drain(5_000);
+      const updated = await api.pauseMeeting(meta.id);
+      recordedBeforePauseRef.current = updated.durationSeconds ?? elapsed;
+      setElapsed(recordedBeforePauseRef.current);
+      setLevel(0);
+      setPhase('paused');
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const resumeRecording = async () => {
+    if (!meta) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const uplink = uplinkRef.current;
+      if (!uplink) throw new Error('Connection was lost. End the meeting and try again.');
+
+      const recorder = await startRecorder(
+        {
+          onAudio: (pcm) => {
+            uplink.send(pcm);
+            setPendingBytes(uplink.pendingBytes);
+          },
+          onLevel: setLevel,
+          onError: (err) => setError(err.message),
+        },
+        deviceIdRef.current,
+      );
+      recorderRef.current = recorder;
+      setDeviceLabel(recorder.deviceLabel);
+
+      await api.resumeMeeting(meta.id);
+      // The clock continues from where the recording left off, not from zero:
+      // paused time does not exist in the audio.
+      startedAtRef.current = Date.now();
+      setPhase('recording');
+    } catch (err) {
+      setError(micErrorMessage(err));
+    } finally {
+      setBusy(false);
+    }
   };
 
   const stopRecording = async () => {
@@ -236,7 +328,9 @@ export default function App() {
     setMeta(null);
     setSnapshot(null);
     setLiveLines([]);
+    setDigest([]);
     setElapsed(0);
+    setPhase('roll_call');
     setError(null);
     setView('home');
   };
@@ -276,15 +370,21 @@ export default function App() {
           {error && <div className="banner error">{error}</div>}
           <Recording
             meta={meta}
+            phase={phase}
             elapsed={elapsed}
             level={level}
             connected={connected}
             liveLines={liveLines}
+            digest={digest}
+            namesHeard={namesHeard}
             pendingBytes={pendingBytes}
             deviceLabel={deviceLabel}
             wakeLockHeld={wakeLockHeld}
             wakeLockSupported={ScreenLockGuard.supported}
-            stopping={stopping}
+            busy={busy || stopping}
+            onRollCallDone={finishRollCall}
+            onPause={pauseRecording}
+            onResume={resumeRecording}
             onStop={stopRecording}
           />
         </>
@@ -445,6 +545,7 @@ function Review({
     return (
       <MinutesView
         meetingId={meta.id}
+        audioAvailable={snapshot.audioAvailable}
         minutes={minutes}
         markdown={markdown}
         transcript={transcript}
@@ -479,8 +580,12 @@ function statusLabel(status: MeetingMeta['status']): string {
   switch (status) {
     case 'setup':
       return 'Not started';
+    case 'roll_call':
+      return 'Roll call';
     case 'recording':
       return 'Recording';
+    case 'paused':
+      return 'Paused';
     case 'transcribing':
       return 'Transcribing';
     case 'identifying':

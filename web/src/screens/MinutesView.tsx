@@ -1,9 +1,10 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { api } from '../lib/api';
 import type { Evidence, MinuteItem, Minutes, Motion, TranscriptSegment } from '../types';
 
 interface Props {
   meetingId: string;
+  audioAvailable: boolean;
   minutes: Minutes;
   markdown: string;
   transcript: TranscriptSegment[];
@@ -12,6 +13,7 @@ interface Props {
 
 export default function MinutesView({
   meetingId,
+  audioAvailable,
   minutes,
   markdown,
   transcript,
@@ -119,7 +121,12 @@ export default function MinutesView({
         </div>
 
         {minutes.items.map((item) => (
-          <Item item={item} key={item.number} />
+          <Item
+            item={item}
+            meetingId={meetingId}
+            playable={audioAvailable}
+            key={item.number}
+          />
         ))}
 
         {minutes.nextMeeting && (
@@ -178,13 +185,23 @@ export default function MinutesView({
       )}
 
       <p className="footer-note">
-        The audio recording was deleted once these minutes were drafted.
+        {audioAvailable
+          ? 'The recording is retained so quotes can be played back, and is deleted automatically on the bucket’s retention schedule.'
+          : 'The audio recording was deleted once these minutes were drafted.'}
       </p>
     </>
   );
 }
 
-function Item({ item }: { item: MinuteItem }) {
+function Item({
+  item,
+  meetingId,
+  playable,
+}: {
+  item: MinuteItem;
+  meetingId: string;
+  playable: boolean;
+}) {
   const sources = [
     ...(item.evidence ?? []),
     ...(item.actions ?? []).map((a) => a.evidence).filter((e): e is Evidence => !!e),
@@ -205,7 +222,7 @@ function Item({ item }: { item: MinuteItem }) {
         ))}
 
       {item.motions?.map((motion, i) => (
-        <MotionBlock motion={motion} key={i} />
+        <MotionBlock motion={motion} meetingId={meetingId} playable={playable} key={i} />
       ))}
 
       {item.resolutions?.map((resolution, i) => (
@@ -246,7 +263,7 @@ function Item({ item }: { item: MinuteItem }) {
           <summary>What was actually said ({sources.length})</summary>
           <div className="sources-list">
             {sources.map((e, i) => (
-              <Quote evidence={e} key={i} />
+              <Quote evidence={e} meetingId={meetingId} playable={playable} key={i} />
             ))}
           </div>
         </details>
@@ -255,7 +272,15 @@ function Item({ item }: { item: MinuteItem }) {
   );
 }
 
-function MotionBlock({ motion }: { motion: Motion }) {
+function MotionBlock({
+  motion,
+  meetingId,
+  playable,
+}: {
+  motion: Motion;
+  meetingId: string;
+  playable: boolean;
+}) {
   const tone = motion.outcome.startsWith('carried')
     ? 'carried'
     : motion.outcome === 'defeated'
@@ -287,17 +312,63 @@ function MotionBlock({ motion }: { motion: Motion }) {
       </div>
       {motion.evidence && (
         <div style={{ marginTop: 9 }}>
-          <Quote evidence={motion.evidence} />
+          <Quote evidence={motion.evidence} meetingId={meetingId} playable={playable} />
         </div>
       )}
     </div>
   );
 }
 
-function Quote({ evidence }: { evidence: Evidence }) {
+/**
+ * A quote is the check on a claim. The minutes are in English but the meeting
+ * was not, so the English is a translation nobody can verify from the page --
+ * unless the original words, and now the original audio, sit underneath it.
+ */
+function Quote({
+  evidence,
+  meetingId,
+  playable,
+}: {
+  evidence: Evidence;
+  meetingId: string;
+  playable: boolean;
+}) {
+  const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'gone'>('idle');
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const play = async () => {
+    if (state === 'playing') {
+      audioRef.current?.pause();
+      setState('idle');
+      return;
+    }
+    setState('loading');
+    try {
+      const audio = new Audio(api.clipUrl(meetingId, evidence.time));
+      audioRef.current = audio;
+      audio.onended = () => setState('idle');
+      audio.onerror = () => setState('gone');
+      await audio.play();
+      setState('playing');
+    } catch {
+      setState('gone');
+    }
+  };
+
   return (
     <p className="quote">
-      <span className="t">{formatTime(evidence.time)}</span>
+      {playable && state !== 'gone' ? (
+        <button
+          className="clip-play"
+          onClick={play}
+          aria-label={`Play the recording at ${formatTime(evidence.time)}`}
+        >
+          {state === 'playing' ? '❚❚' : state === 'loading' ? '…' : '▶'}
+          <span className="t">{formatTime(evidence.time)}</span>
+        </button>
+      ) : (
+        <span className="t">{formatTime(evidence.time)}</span>
+      )}
       “{evidence.quote}”
     </p>
   );

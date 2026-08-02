@@ -34,11 +34,27 @@ export const config = {
 
   models: {
     live: process.env.MODEL_LIVE ?? 'gemini-3.6-flash',
+    digest: process.env.MODEL_DIGEST ?? 'gemini-3.6-flash',
     transcribe: process.env.MODEL_TRANSCRIBE ?? 'gemini-3.6-flash',
     minutes: process.env.MODEL_MINUTES ?? 'gemini-3.6-flash',
   },
 
   gcsBucket: process.env.GCS_BUCKET || undefined,
+
+  /**
+   * How long to keep the recording after the minutes are drafted.
+   *
+   * 0 deletes it immediately, which is the strongest privacy posture and lets
+   * you tell the room the recording does not survive. Anything higher keeps it
+   * so a disputed minute can be settled by listening to what was actually said
+   * -- the quotes already carry timestamps, so this turns the evidence layer
+   * from "trust the translation" into "play the eight seconds".
+   *
+   * Bounded on purpose. Voice recordings of colleagues accumulating forever is
+   * a records-retention decision nobody consciously made; a month is long
+   * enough to settle an argument about last week's meeting.
+   */
+  retainAudioDays: Number(process.env.RETAIN_AUDIO_DAYS ?? 30),
 
   dataDir: path.resolve(process.env.DATA_DIR ?? './data'),
 
@@ -59,6 +75,50 @@ export const config = {
 
   /** Overlap between segments so a sentence split across the seam survives. */
   segmentOverlapSeconds: 10,
+
+  /**
+   * The live pass batches audio before transcribing it, and the batch size
+   * ramps.
+   *
+   * Short chunks at the start because the first job is confirming the mic hears
+   * everyone, and you want to know that within seconds, not a minute. Longer
+   * chunks afterwards because the second job is scrollback -- being able to
+   * check at 01:30 what was said at 00:30 -- and for that, fewer larger blocks
+   * read better than a hundred fragments.
+   *
+   * It is also most of the cost. Every chunk re-sends the same language rules,
+   * so at 20s the prompt overhead is nearly half the input tokens. Tripling the
+   * chunk length past the mic-check window cuts the live pass by about a third
+   * and loses nothing.
+   */
+  live: {
+    initialChunkSeconds: Number(process.env.LIVE_INITIAL_CHUNK_SECONDS ?? 20),
+    steadyChunkSeconds: Number(process.env.LIVE_STEADY_CHUNK_SECONDS ?? 60),
+    rampAfterSeconds: Number(process.env.LIVE_RAMP_AFTER_SECONDS ?? 180),
+  },
+
+  /**
+   * How often to fold the live transcript into a summary block. Five minutes is
+   * long enough for a topic to have a shape and short enough that the block
+   * boundaries roughly track the agenda.
+   */
+  digestIntervalSeconds: Number(process.env.DIGEST_INTERVAL_SECONDS ?? 300),
+
+  rollCall: {
+    /** Give up waiting for introductions to end and start the meeting anyway. */
+    maxSeconds: Number(process.env.ROLL_CALL_MAX_SECONDS ?? 240),
+  },
 } as const;
 
 export type Config = typeof config;
+
+/**
+ * How much audio to batch before sending it off for a live transcription,
+ * given how long the meeting has been running.
+ */
+export function liveChunkBytes(elapsedSeconds: number): number {
+  const { initialChunkSeconds, steadyChunkSeconds, rampAfterSeconds } = config.live;
+  const seconds =
+    elapsedSeconds < rampAfterSeconds ? initialChunkSeconds : steadyChunkSeconds;
+  return seconds * bytesPerSecond;
+}

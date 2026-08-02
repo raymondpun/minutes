@@ -81,6 +81,130 @@ empty string.
 `.trim();
 }
 
+/* ------------------------------------------------------------- roll call --- */
+
+export function rollCallPrompt(text: string, expectedAttendees: string[]): string {
+  return `
+A meeting has just started. The chair asked everyone present to say their name
+before business begins. Below is the rough live transcript of the opening.
+
+Decide whether that round of introductions has FINISHED and the meeting proper
+has started.
+
+It has finished when people stop saying who they are and start discussing
+something — an agenda item, apologies, last meeting's minutes, any actual topic.
+
+It has NOT finished while people are still saying things like:
+  "我係 Raymond", "Hi, I'm Cheryl", "Peter here, operations", "我叫陳大文",
+  or the chair is still going round the table prompting people.
+
+Be conservative in one direction only: it is much better to keep listening for
+another twenty seconds than to cut the introductions off early and lose
+somebody's name. If you are unsure, answer false.
+
+A short pause, or the chair saying "OK" or "好", is not on its own the end.
+
+namesHeard: every name you heard someone give for THEMSELVES, spelled as best
+you can. Not names of people being talked about. Empty array if none yet.
+
+reason: a handful of words on what decided it.
+${expectedAttendees.length ? `\nExpected to attend: ${expectedAttendees.join(', ')}.` : ''}
+
+TRANSCRIPT SO FAR
+${text}
+`.trim();
+}
+
+export const ROLL_CALL_SCHEMA = {
+  type: 'object',
+  properties: {
+    finished: { type: 'boolean' },
+    namesHeard: { type: 'array', items: { type: 'string' } },
+    reason: { type: 'string' },
+  },
+  required: ['finished', 'namesHeard', 'reason'],
+} as const;
+
+/* ---------------------------------------------------------------- digest --- */
+
+/**
+ * Runs every few minutes during the meeting, over the transcript since the last
+ * block. Produces the running summary the chair reads back in the room.
+ *
+ * The hard part is restraint. Half way through a discussion the model has heard
+ * an argument but not its conclusion, and the temptation is to write down the
+ * loudest opinion as though it were the outcome. A wrong running summary is
+ * worse than none, because it is read during the meeting and acted on.
+ */
+export function digestPrompt(args: {
+  text: string;
+  recentHeadings: string[];
+  fromSeconds: number;
+  toSeconds: number;
+}): string {
+  const { text, recentHeadings, fromSeconds, toSeconds } = args;
+
+  return `
+Below is a rough live transcript of the last few minutes of a meeting in
+progress (from ${formatClock(fromSeconds)} to ${formatClock(toSeconds)} of the
+recording). It was transcribed in short chunks and is not fully accurate.
+
+Summarise this window so someone in the room can glance back later and remember
+what was covered.
+
+WRITE THE SUMMARY IN ENGLISH, even though the meeting is in Cantonese mixed with
+English. Keep names and terms as spoken.
+
+${
+  recentHeadings.length
+    ? `The previous blocks were headed:
+${recentHeadings.map((h) => `  - ${h}`).join('\n')}
+
+If this window continues the SAME topic as the most recent heading, reuse that
+heading exactly and set continuesPrevious to true. If the discussion has moved
+on, write a new heading and set continuesPrevious to false.`
+    : 'This is the first block of the meeting. Set continuesPrevious to false.'
+}
+
+heading: three to six words naming the topic. Concrete, not "Discussion" or
+  "General Update". "Q3 revenue shortfall" or "Kwun Tong office lease".
+
+bullets: two to four short points. What was said and by whom where a name was
+  used. Positions taken, numbers quoted, questions raised. Past tense.
+
+decisions: ONLY where someone actually stated, agreed to, or confirmed
+  something in this window. This is the field you will be tempted to overfill.
+  People discussing an option at length have decided nothing. An argument
+  someone made is not a decision. If nobody concluded anything, return an empty
+  array -- which is the normal case for most five minute windows of most
+  meetings.
+
+Never invent a name, a number, a date or an outcome. Where the transcript is
+garbled, leave it out rather than guessing. This is a rough transcript and
+over-reading it is the main risk.
+
+TRANSCRIPT OF THIS WINDOW
+${text}
+`.trim();
+}
+
+export const DIGEST_SCHEMA = {
+  type: 'object',
+  properties: {
+    heading: { type: 'string' },
+    bullets: { type: 'array', items: { type: 'string' } },
+    decisions: { type: 'array', items: { type: 'string' } },
+    continuesPrevious: { type: 'boolean' },
+  },
+  required: ['heading', 'bullets', 'decisions', 'continuesPrevious'],
+} as const;
+
+function formatClock(seconds: number): string {
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
 /* ------------------------------------------------------- full transcript --- */
 
 export function diarizedTranscriptPrompt(args: {
@@ -168,8 +292,9 @@ export const TRANSCRIPT_SCHEMA = {
 export function identifySpeakersPrompt(args: {
   transcript: TranscriptSegment[];
   expectedAttendees: string[];
+  rollCallEndedAt?: number;
 }): string {
-  const { transcript, expectedAttendees } = args;
+  const { transcript, expectedAttendees, rollCallEndedAt } = args;
   const lines = transcript
     .map((s) => `[${s.start.toFixed(1)}s] ${s.speaker}: ${s.text}`)
     .join('\n');
@@ -181,6 +306,14 @@ labelled "Speaker 1", "Speaker 2" and so on.
 At the start of the meeting the attendees were asked to say their own names.
 Your job is to map each speaker label to a real person's name.
 
+${
+    rollCallEndedAt
+      ? `THE ROLL CALL IS BETWEEN 0s AND ${rollCallEndedAt.toFixed(0)}s.
+The chair ran an explicit round of introductions there before the meeting
+proper began. That stretch is your primary evidence -- work through it first
+and map every voice you can before looking anywhere else.\n`
+      : ''
+}
 HOW TO DO THIS
 1. Look first at the opening minutes for self-introductions:
    "我係 Raymond", "Hi, I'm Cheryl", "我叫陳大文", "Peter here".

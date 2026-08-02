@@ -32,6 +32,7 @@ export const api = {
       location: string;
       models: Record<string, string>;
       singlePassTranscription: boolean;
+      retainAudioDays: number;
     }>('/api/health'),
 
   listMeetings: () => request<MeetingMeta[]>('/api/meetings'),
@@ -46,6 +47,15 @@ export const api = {
 
   startMeeting: (id: string) =>
     request<MeetingMeta>(`/api/meetings/${id}/start`, { method: 'POST' }),
+
+  rollCallDone: (id: string) =>
+    request<MeetingMeta>(`/api/meetings/${id}/roll-call-done`, { method: 'POST' }),
+
+  pauseMeeting: (id: string) =>
+    request<MeetingMeta>(`/api/meetings/${id}/pause`, { method: 'POST' }),
+
+  resumeMeeting: (id: string) =>
+    request<MeetingMeta>(`/api/meetings/${id}/resume`, { method: 'POST' }),
 
   stopMeeting: (id: string) =>
     request<MeetingMeta>(`/api/meetings/${id}/stop`, { method: 'POST' }),
@@ -63,6 +73,9 @@ export const api = {
 
   deleteMeeting: (id: string) =>
     request<{ ok: boolean }>(`/api/meetings/${id}`, { method: 'DELETE' }),
+
+  clipUrl: (id: string, at: number) =>
+    `/api/meetings/${id}/clip?at=${encodeURIComponent(Math.max(0, Math.round(at)))}`,
 
   minutesUrl: (id: string) => `/api/meetings/${id}/minutes.md`,
   transcriptUrl: (id: string) => `/api/meetings/${id}/transcript.txt`,

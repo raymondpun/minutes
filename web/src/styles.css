@@ -532,6 +532,232 @@ button:disabled {
   background: var(--brass-wash);
 }
 
+/* ------------------------------------------------------- tabs & digest --- */
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  background: var(--surface-2);
+  border-radius: var(--radius);
+  padding: 4px;
+}
+
+.tab {
+  flex: 1;
+  min-height: 38px;
+  padding: 8px 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  background: transparent;
+  color: var(--ink-soft);
+  border-radius: 7px;
+}
+
+.tab.on {
+  background: var(--surface);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.14);
+}
+
+.digest-block {
+  padding-bottom: 14px;
+  border-bottom: 1px solid var(--rule);
+}
+
+.digest-block:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.digest-head {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  margin-bottom: 6px;
+}
+
+.digest-time {
+  font-family: var(--font-data);
+  font-size: 11px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  padding-top: 1px;
+}
+
+.digest-heading {
+  font-size: 14.5px;
+  font-weight: 700;
+  margin: 0;
+  letter-spacing: -0.005em;
+}
+
+.digest-cont {
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+
+.digest-bullets {
+  margin: 0;
+  padding-left: 18px;
+  font-size: 14px;
+  line-height: 1.55;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink-soft);
+}
+
+.digest-decisions {
+  margin-top: 9px;
+  background: var(--jade-wash);
+  border: 1px solid color-mix(in srgb, var(--jade) 32%, transparent);
+  border-radius: var(--radius);
+  padding: 9px 12px;
+}
+
+.digest-decisions-label {
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--jade);
+  display: block;
+  margin-bottom: 4px;
+}
+
+.digest-decisions ul {
+  margin: 0;
+  padding-left: 16px;
+  font-size: 13.5px;
+  line-height: 1.5;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* ------------------------------------------------------------ roll call -- */
+
+.rollcall-voices {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.voice-chip {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+  padding: 11px 13px;
+  font-size: 14.5px;
+}
+
+.voice-chip .n {
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--seal);
+  color: var(--seal-ink);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+/* --------------------------------------------------------------- paused -- */
+
+.paused-state {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  background: var(--surface);
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-lg);
+  padding: 34px 22px;
+  text-align: center;
+}
+
+.paused-mark {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--brass);
+}
+
+.controls {
+  display: flex;
+  gap: 10px;
+}
+
+.controls > * {
+  flex: 1;
+}
+
+/* Search over the live transcript. At ninety minutes the feed is far too long
+   to scroll back through on a phone, and "what did we say about the budget?"
+   is the actual question being asked of it mid-meeting. */
+.feed-search {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.feed-search input {
+  padding-right: 84px;
+  font-size: 15px;
+  margin: 0;
+}
+
+.feed-count {
+  position: absolute;
+  right: 12px;
+  font-size: 12px;
+  color: var(--ink-faint);
+  font-variant-numeric: tabular-nums;
+  pointer-events: none;
+}
+
+.feed-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  min-height: 150px;
+}
+
+.back-to-live {
+  position: absolute;
+  bottom: 12px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--ink);
+  color: var(--ground);
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  min-height: 0;
+  width: auto;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 0.28);
+}
+
+.live-feed mark {
+  background: var(--brass-wash);
+  color: var(--ink);
+  border-bottom: 1.5px solid var(--brass);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
 .live-feed {
   flex: 1;
   overflow-y: auto;
@@ -911,6 +1137,28 @@ button:disabled {
 
 .quote {
   line-height: 1.6;
+}
+
+/* The play control is deliberately small and inline: the quote is the primary
+   evidence, the audio is the escalation when the quote is disputed. */
+.clip-play {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--surface-2);
+  border: 1px solid var(--rule);
+  border-radius: 999px;
+  padding: 2px 9px 2px 8px;
+  margin-right: 7px;
+  min-height: 0;
+  width: auto;
+  font-size: 10px;
+  color: var(--seal);
+  vertical-align: 2px;
+}
+
+.clip-play .t {
+  margin-right: 0;
 }
 
 .quote .t {

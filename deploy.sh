@@ -54,6 +54,36 @@ if [[ -n "${GCS_BUCKET:-}" ]]; then
     --role roles/storage.objectAdmin \
     --project "$PROJECT" >/dev/null
   ENV_VARS="${ENV_VARS},GCS_BUCKET=${GCS_BUCKET}"
+
+  RETAIN_DAYS="${RETAIN_AUDIO_DAYS:-30}"
+  ENV_VARS="${ENV_VARS},RETAIN_AUDIO_DAYS=${RETAIN_DAYS}"
+
+  if [[ "$RETAIN_DAYS" -gt 0 ]]; then
+    # Enforce retention at the bucket rather than in application code. A
+    # deletion that depends on the app remembering to run is a deletion that
+    # eventually does not happen, and this object is a recording of people's
+    # voices. Only audio ages out -- minutes and transcripts are kept.
+    echo "==> Setting a ${RETAIN_DAYS}-day lifecycle rule on the recordings"
+    LIFECYCLE=$(mktemp)
+    cat > "$LIFECYCLE" <<JSON
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": { "type": "Delete" },
+        "condition": {
+          "age": ${RETAIN_DAYS},
+          "matchesSuffix": ["audio.wav"]
+        }
+      }
+    ]
+  }
+}
+JSON
+    gcloud storage buckets update "gs://${GCS_BUCKET}" \
+      --lifecycle-file="$LIFECYCLE" --project "$PROJECT" >/dev/null
+    rm -f "$LIFECYCLE"
+  fi
 fi
 
 echo "==> Deploying"
@@ -65,15 +95,23 @@ gcloud run deploy "$SERVICE" \
   --set-env-vars "$ENV_VARS" \
   --memory 2Gi \
   --cpu 2 \
+  `# Cloud Run caps a single request at 60 minutes, and a websocket is one` \
+  `# request. Longer meetings therefore see a reconnect on the hour; the client` \
+  `# buffers across it, so no audio is lost.` \
   --timeout 3600 \
   --concurrency 20 \
-  `# Keep one instance warm: a cold start in the ten seconds before a meeting` \
-  `# begins is exactly when you cannot afford to wait.` \
-  --min-instances 1 \
+  `# Scale to zero between meetings -- this is idle almost all the time, and a` \
+  `# few seconds of cold start before you press record costs nothing.` \
+  --min-instances 0 \
   `# Recordings stream to the instance's local disk, so a meeting must stay on` \
   `# the instance that started it.` \
   --max-instances 1 \
   --session-affinity \
+  `# Essential with min-instances 0. By default Cloud Run throttles CPU to` \
+  `# near zero once a response is sent, which would freeze the transcription` \
+  `# job that runs after you press stop. This keeps the CPU allocated for the` \
+  `# life of the instance.` \
+  --no-cpu-throttling \
   --allow-unauthenticated
 
 URL=$(gcloud run services describe "$SERVICE" \

@@ -1,13 +1,17 @@
-import type { LiveLine } from '../types';
+import type { DigestBlock, LiveLine } from '../types';
 
 type ServerEvent =
   | { type: 'ready'; meetingId: string }
   | { type: 'live'; start: number; end: number; text: string }
+  | { type: 'digest'; block: DigestBlock }
+  | { type: 'roll_call_ended'; at: number; namesHeard: string[] }
   | { type: 'chunk_ack'; index: number; seconds: number }
   | { type: 'error'; message: string };
 
 export interface UplinkCallbacks {
   onLive: (line: LiveLine) => void;
+  onDigest: (block: DigestBlock) => void;
+  onRollCallEnded: (namesHeard: string[]) => void;
   onSecondsRecorded: (seconds: number) => void;
   onConnectionChange: (connected: boolean) => void;
 }
@@ -66,6 +70,10 @@ export class Uplink {
           end: message.end,
           text: message.text,
         });
+      } else if (message.type === 'digest') {
+        this.callbacks.onDigest(message.block);
+      } else if (message.type === 'roll_call_ended') {
+        this.callbacks.onRollCallEnded(message.namesHeard);
       } else if (message.type === 'chunk_ack') {
         this.callbacks.onSecondsRecorded(message.seconds);
       }

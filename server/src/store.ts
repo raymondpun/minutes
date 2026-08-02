@@ -5,6 +5,7 @@ import crypto from 'node:crypto';
 import { config } from './config.js';
 import { pcmDurationSeconds } from './wav.js';
 import type {
+  DigestBlock,
   MeetingMeta,
   MeetingStatus,
   Minutes,
@@ -36,6 +37,7 @@ const paths = {
   pcm: (id: string) => path.join(dir(id), 'audio.pcm'),
   wav: (id: string) => path.join(dir(id), 'audio.wav'),
   live: (id: string) => path.join(dir(id), 'live.jsonl'),
+  digest: (id: string) => path.join(dir(id), 'digest.jsonl'),
   transcript: (id: string) => path.join(dir(id), 'transcript.json'),
   speakers: (id: string) => path.join(dir(id), 'speakers.json'),
   minutesJson: (id: string) => path.join(dir(id), 'minutes.json'),
@@ -48,6 +50,7 @@ export async function createMeeting(
   const id = `${new Date().toISOString().slice(0, 10)}-${crypto.randomBytes(4).toString('hex')}`;
   const meta: MeetingMeta = {
     ...input,
+    pauses: input.pauses ?? [],
     id,
     status: 'setup',
     createdAt: new Date().toISOString(),
@@ -168,6 +171,8 @@ export async function readPcmRange(
 
 export const pcmPath = paths.pcm;
 export const wavPath = paths.wav;
+export const meetingDir = dir;
+export const meetingsRoot = () => path.join(config.dataDir, 'meetings');
 
 /* ----------------------------------------------------------- transcripts --- */
 
@@ -187,6 +192,22 @@ export async function readLive(
       .split('\n')
       .filter(Boolean)
       .map((l) => JSON.parse(l));
+  } catch {
+    return [];
+  }
+}
+
+export async function appendDigest(id: string, block: DigestBlock): Promise<void> {
+  await fsp.appendFile(paths.digest(id), `${JSON.stringify(block)}\n`);
+}
+
+export async function readDigest(id: string): Promise<DigestBlock[]> {
+  try {
+    const raw = await fsp.readFile(paths.digest(id), 'utf8');
+    return raw
+      .split('\n')
+      .filter(Boolean)
+      .map((l) => JSON.parse(l) as DigestBlock);
   } catch {
     return [];
   }
