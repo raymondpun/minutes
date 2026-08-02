@@ -454,11 +454,24 @@ web/src/
 ```
 
 ```bash
-npm test        # WAV framing, minutes rendering, server + websocket smoke test
+npm test         # 127 assertions, no credentials needed
 npm run typecheck
+npm run check    # the only thing that talks to Vertex
 ```
 
-Neither suite touches Vertex, so both run without credentials.
+Three suites, none of which touch Vertex:
+
+| Suite | What it exercises |
+| --- | --- |
+| `units.mjs` | WAV framing byte by byte, sample-boundary offsets, the chunk ramp, the Markdown renderer, and the Word document — inflated from the zip and asserted against parsed XML, because grepping compressed bytes proves nothing about what Word opens. |
+| `pipeline.mjs` | The model stubbed out, so everything *downstream* of a Gemini call runs: shifting segment timestamps into meeting time, de-duplicating the overlap seam, carrying speaker labels between segments, rejecting a hallucinated speaker, backfilling the minutes header, and raising a review flag for every unnamed voice, unowned action and unclear vote. |
+| `smoke.mjs` | A real server, real HTTP, a real websocket carrying real synthetic PCM. Audio lands on disk to the byte, roll call / pause / resume move the state machine correctly, clips extract at the right offsets, traversal is refused. |
+
+**What none of them can tell you** is whether the prompts work — whether Gemini
+keeps Cantonese in 口語, holds speaker labels across two hours, or resists
+turning an argument into a decision. That is judgement, not logic, and only a
+real recording answers it. That is what `npm run check -- recording.m4a` is for,
+and it should be the first thing you run.
 
 ## Known limits
 

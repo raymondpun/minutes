@@ -44,7 +44,33 @@ interface GenerateOptions {
 
 const RETRYABLE = /429|500|502|503|504|deadline|unavailable|overloaded|timeout/i;
 
+/**
+ * Test seam.
+ *
+ * Everything downstream of a model call -- stitching segments across
+ * boundaries, de-duplicating the overlap, mapping voices to names, deciding
+ * whether the result is confident enough to draft without asking -- is ordinary
+ * logic that can be wrong in ordinary ways. Without this it could only be
+ * exercised by a real Vertex call, which means it would only ever be exercised
+ * in a real meeting.
+ *
+ * Substituting canned responses tests that logic. It says nothing about whether
+ * the prompts work; that still needs real audio.
+ */
+type Generator = (opts: GenerateOptions) => Promise<string>;
+
+let override: Generator | undefined;
+
+export function __setGeneratorForTests(fn: Generator | undefined): void {
+  override = fn;
+}
+
 export async function generate(opts: GenerateOptions): Promise<string> {
+  if (override) return override(opts);
+  return callVertex(opts);
+}
+
+async function callVertex(opts: GenerateOptions): Promise<string> {
   const maxAttempts = 4;
   let lastError: unknown;
 
