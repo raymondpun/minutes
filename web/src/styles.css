@@ -367,6 +367,20 @@ button:disabled {
   width: auto;
 }
 
+/* The way back from a meeting to the list. A quiet text control at the top of
+   the screen, not a boxed button competing with the document below it. */
+.back-link {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  padding: 2px 0 10px;
+  min-height: 0;
+  font-size: 13.5px;
+  font-weight: 600;
+  width: auto;
+  align-self: flex-start;
+}
+
 /* --------------------------------------------------------- home list ----- */
 
 .meeting-item {

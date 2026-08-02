@@ -545,7 +545,29 @@ function Home({
   );
 }
 
-function Review({
+function Review(props: {
+  snapshot: MeetingSnapshot | null;
+  busy: boolean;
+  error: string | null;
+  onConfirmSpeakers: (speakers: SpeakerIdentification[]) => void;
+  onRetranscribe: () => void;
+  onNew: () => void;
+}) {
+  // The one piece of navigation every review state needs: a way back to the
+  // list. Without it, opening an old meeting was a dead end -- the only exits
+  // were buttons at the bottom of a long document, or none at all while the
+  // pipeline was still working.
+  return (
+    <>
+      <button className="back-link" onClick={props.onNew}>
+        ← All meetings
+      </button>
+      <ReviewBody {...props} />
+    </>
+  );
+}
+
+function ReviewBody({
   snapshot,
   busy,
   error,
@@ -589,9 +611,6 @@ function Review({
             {busy ? 'Starting…' : 'Re-process the recording'}
           </button>
         )}
-        <button className="btn-ghost" onClick={onNew}>
-          Back
-        </button>
       </>
     );
   }
