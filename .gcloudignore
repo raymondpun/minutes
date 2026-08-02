@@ -1,0 +1,38 @@
+# What NOT to upload to Cloud Build.
+#
+# `gcloud run deploy --source .` tars this directory and sends it to Cloud
+# Build, which builds the container from the Dockerfile. Dependencies are
+# installed inside the image by `npm ci`, so anything already installed here is
+# dead weight -- node_modules alone is a few hundred megabytes, and uploading it
+# would make every deploy slow for no reason.
+#
+# Without this file gcloud falls back to .gitignore, which happens to cover the
+# same ground. Being explicit means a future change to .gitignore cannot quietly
+# start shipping a recording of somebody's meeting to a build server.
+
+.git/
+.gitignore
+
+node_modules/
+**/node_modules/
+
+# Built inside the container by `npm run build`.
+dist/
+**/dist/
+
+# Local meetings: audio, transcripts, minutes. Never upload these.
+data/
+
+# Local configuration. Cloud Run gets its own via --set-env-vars.
+.env
+.env.local
+
+# Output of `npm run check -- recording.m4a`.
+preflight-minutes.md
+*.wav
+*.pcm
+*.m4a
+*.mp3
+
+*.log
+.DS_Store

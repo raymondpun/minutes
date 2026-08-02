@@ -16,7 +16,7 @@ secret, there isn't one — see [Secrets](#secrets) for why.
 
 - [Part 1 — Set up the project](#part-1--set-up-the-project) *(console + Cloud Shell)*
 - [Part 2 — Deploy](#part-2--deploy) *(Cloud Shell)*
-- [Part 3 — Prove it works](#part-3--prove-it-works)
+- [Part 3 — Prove it works](#part-3--prove-it-works) *(no terminal needed)*
 - [Part 4 — Put it on your phone](#part-4--put-it-on-your-phone)
 - [Part 5 — Deploy automatically on every push](#part-5--deploy-automatically-on-every-push) *(optional)*
 - [Environment variables](#environment-variables)
@@ -149,15 +149,15 @@ git clone -b develop https://github.com/raymondpun/minutes.git
 > **The code is on `develop`, not `main`.** `main` is an empty commit that only
 > exists as a pull-request base. The `-b develop` above is not optional.
 
-## 2.2 Install dependencies
+## 2.2 Deploy
 
-```bash
-npm install
-```
+**No `npm install`. Nothing is built here.**
 
-Two or three minutes on Cloud Shell's connection.
-
-## 2.3 Deploy
+`deploy.sh` runs `gcloud run deploy --source .`, which tars this directory,
+sends it to **Cloud Build**, and the container is built there from the
+`Dockerfile` — which runs `npm ci` inside the image. Cloud Shell is only doing
+the upload. (`.gcloudignore` keeps `node_modules`, `data/` and `.env` out of
+that upload.)
 
 ```bash
 export GCS_BUCKET=ray-minutes-app-recordings
@@ -166,109 +166,127 @@ export RETAIN_AUDIO_DAYS=30
 ./deploy.sh ray-minutes-app asia-east2
 ```
 
-First build is 5–10 minutes; later ones 2–3. Cloud Shell will ask you to
-**authorise** the first `gcloud` call that needs it — click Authorize.
+First build 5–10 minutes; later ones 2–3. Cloud Shell will ask you to
+**Authorize** the first `gcloud` call — click it.
 
-The script does all of this so you don't have to:
+The script:
 
 1. Enables any APIs still missing
-2. Creates a dedicated service account `minutes-run@…`. **The app runs as this,
-   not as you** — it can call Vertex and touch that one bucket, nothing else.
+2. Creates a service account `minutes-run@…`. **The app runs as this, not as
+   you** — it can call Vertex and touch that one bucket, nothing else
 3. Grants it `roles/aiplatform.user` and `roles/storage.objectAdmin` on the bucket
-4. Sets a **bucket lifecycle rule** matching `RETAIN_AUDIO_DAYS`, so deleting
-   old recordings is enforced by Cloud Storage rather than by the app
-   remembering to do it
-5. Builds the container and deploys it
-6. Prints your HTTPS URL
+4. Sets a **bucket lifecycle rule** matching `RETAIN_AUDIO_DAYS`, so deleting old
+   recordings is enforced by Cloud Storage rather than by the app remembering to
+5. Passes the configuration to the service with `--set-env-vars`
+6. Builds and deploys
+7. Prints your HTTPS URL
 
-Keep that URL. It is unguessable but public — see
-[Locking it down](#locking-it-down).
+## 2.3 Where the configuration actually lives
+
+There are two separate channels, and confusing them is the easiest mistake here:
+
+| | Read by | Set how | Reaches Cloud Run? |
+| --- | --- | --- | --- |
+| **Service env vars** | the deployed app | `--set-env-vars` in `deploy.sh`, or `gcloud run services update` | **Yes — this is the real config** |
+| **`.env` file** | `npm run check` / `npm run dev` on whatever machine you are sitting at | editing the file | **No.** Excluded by `.gcloudignore` |
+
+So the parameters are set **on the Cloud Run instance**, by `deploy.sh`. You do
+not need a `.env` at all to run the service.
+
+See what the service is actually running with:
+
+```bash
+gcloud run services describe minutes --region asia-east2 \
+  --format='value(spec.template.spec.containers[0].env)'
+```
+
+Change one without redeploying — this restarts the service with the new value:
+
+```bash
+gcloud run services update minutes --region asia-east2 \
+  --update-env-vars RETAIN_AUDIO_DAYS=0
+```
 
 ---
 
 # Part 3 — Prove it works
 
-Still in Cloud Shell. **This is the first time any of this code touches Vertex.**
-
-## 3.1 Check the connection
-
-Create a local config so the check knows which project to use:
+## 3.1 Confirm the config landed
 
 ```bash
+URL=$(gcloud run services describe minutes --region asia-east2 --format='value(status.url)')
+curl -s $URL/api/health
+```
+
+```json
+{
+  "ok": true,
+  "project": "ray-minutes-app",
+  "location": "asia-east2",
+  "models": { "transcribe": "gemini-3.6-flash", ... },
+  "singlePassTranscription": true,
+  "retainAudioDays": 30
+}
+```
+
+`singlePassTranscription: true` means it found your bucket. If that says
+`false`, `GCS_BUCKET` did not reach the service — re-export it and redeploy.
+
+## 3.2 Run a two-minute test meeting
+
+**This is the real test, and it needs no terminal.** Open the URL on your phone,
+and record a two-minute meeting with a colleague. Both say your names at the
+start, then talk normally — ideally about something with a number and a decision
+in it. Press stop and read what comes out.
+
+That exercises the entire path — microphone, streaming, live transcription,
+roll-call detection, diarization, speaker naming, drafting — in exactly the
+conditions a real meeting will. Nothing simulated.
+
+**What to look at in the result:**
+
+- Is the Cantonese written as spoken (係 唔係 嘅 咗), or converted to 書面語
+  (是 不是 的 了)? The second is a prompt problem, and it destroys the
+  transcript's value as evidence.
+- Did each voice get the right name?
+- Does the "to verify before sign-off" list make sense?
+
+**Do this before a meeting that matters.** It is the only thing that tells you
+whether the model actually holds Cantonese on your voices, in your room.
+
+## 3.3 If something fails — the diagnostic script
+
+Only needed when 3.1 or 3.2 goes wrong. This one *does* run Node locally, which
+is why it needs `npm install` and a `.env`:
+
+```bash
+npm install
+
 cat > .env <<'EOF'
 GOOGLE_CLOUD_PROJECT=ray-minutes-app
 GOOGLE_CLOUD_LOCATION=asia-east2
 GCS_BUCKET=ray-minutes-app-recordings
-RETAIN_AUDIO_DAYS=30
 EOF
 
 npm run check
 ```
 
-Expect:
+It isolates each layer separately — credentials, model reachable in your region,
+structured output honoured, audio input accepted, bucket readable and writable —
+and prints the exact command to fix whichever one failed. Costs a fraction of a
+cent.
 
-```
-1. Configuration
-  ✓ project ray-minutes-app
-  ✓ region asia-east2
-  ✓ model gemini-3.6-flash
-  ✓ audio retention 30 days
-  ✓ transcription mode single pass via gs://ray-minutes-app-recordings
-
-2. Credentials
-  ✓ access token obtained application default credentials
-
-3. Vertex AI
-  ✓ gemini-3.6-flash reachable, structured output works
-  ✓ gemini-3.6-flash accepts inline audio
-
-4. Cloud Storage
-  ✓ gs://ray-minutes-app-recordings readable and writable
-
-Ready.
-```
-
-Costs a fraction of a cent. Every failure prints the command that fixes it.
-
-> If step 2 fails in Cloud Shell, run `gcloud auth application-default login`
-> and follow the browser flow, then try again.
-
-**If `gemini-3.6-flash` is not served in your region**, the check says so. Fix
-it without redeploying:
-
-```bash
-gcloud run services update minutes --region asia-east2 \
-  --update-env-vars GOOGLE_CLOUD_LOCATION=us-central1
-```
-
-## 3.2 Check the transcription — the one that matters
-
-Everything above proves the plumbing. This proves the *product*: whether the
-model actually holds spoken Cantonese, and whether it maps voices to names.
-
-Record two minutes on your phone's voice memo app with a colleague. Both say
-your names at the start, then talk normally — ideally about something with a
-number and a decision in it.
-
-Upload it to Cloud Shell: **⋮ menu (top right of the terminal) → Upload → File**.
-It lands in your home directory.
+To debug transcription quality specifically, upload a recording via the
+terminal's **⋮ menu → Upload → File** and run:
 
 ```bash
 npm run check -- ~/test.m4a
-```
-
-This prints the transcript with speakers, the name mapping and the evidence
-behind each one, drafts real minutes to `preflight-minutes.md`, and checks the
-failure that hides best — whether the model is quietly rewriting spoken
-Cantonese (係 唔係 嘅 咗) into formal 書面語 (是 不是 的 了).
-
-```bash
 cat preflight-minutes.md
 ```
 
-**Read it before you trust the app with a real meeting.** If the Cantonese is
-being converted, or a name landed on the wrong person, that is a prompt problem
-and deploying again will not fix it.
+That prints the transcript, the name mapping with its evidence, and counts
+colloquial Cantonese against 書面語 so drift shows up as a number rather than a
+hunch.
 
 ---
 
@@ -313,7 +331,7 @@ You will be sent to the console once to **connect the GitHub repository** and
 install the Cloud Build GitHub App. The repo needs a `cloudbuild.yaml` — not
 present yet; ask and I'll add one.
 
-Until then, updating is Part 2 again:
+Until then, updating is Part 2 again — still no `npm install`:
 
 ```bash
 cd ~/minutes && git pull

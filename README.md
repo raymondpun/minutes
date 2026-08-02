@@ -183,10 +183,12 @@ Browsers refuse microphone access outside a secure context, so a phone
 ```
 
 **→ [DEPLOY.md](DEPLOY.md) is the full step-by-step, and it needs nothing
-installed locally** — the whole deployment runs in Cloud Shell, a terminal in
-your browser that already has gcloud, Node and git. Covers project setup,
-billing, the bucket, environment variables, why there are no API keys, locking
-the URL down, rolling back, cost, and a troubleshooting table.
+installed locally.** The whole deployment runs in Cloud Shell — a terminal in
+your browser that already has gcloud and git. The container is built by Cloud
+Build from the Dockerfile, so there is no `npm install` anywhere in it. Covers
+project setup, billing, the bucket, where configuration actually lives (on the
+Cloud Run service, not in a file), why there are no API keys, locking the URL
+down, rolling back, cost, and a troubleshooting table.
 
 or, for a quick test against your laptop:
 
