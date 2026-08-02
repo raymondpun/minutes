@@ -38,6 +38,13 @@ interface GenerateOptions {
   responseSchema?: unknown;
   temperature?: number;
   maxOutputTokens?: number;
+  /**
+   * Cap on thinking tokens, which come out of the same maxOutputTokens budget
+   * on Gemini 3.x. Left uncapped, a long think can starve the visible output
+   * and truncate the JSON mid-object. 0 disables thinking entirely -- right
+   * for transcription, which is perception, not reasoning.
+   */
+  thinkingBudget?: number;
   /** Label used in logs so you can tell which stage was slow or failed. */
   label: string;
 }
@@ -85,6 +92,9 @@ async function callVertex(opts: GenerateOptions): Promise<string> {
           // temperature above zero is the model inventing variety we don't want.
           temperature: opts.temperature ?? 0,
           maxOutputTokens: opts.maxOutputTokens ?? 32_768,
+          ...(opts.thinkingBudget !== undefined
+            ? { thinkingConfig: { thinkingBudget: opts.thinkingBudget } }
+            : {}),
           ...(opts.systemInstruction
             ? { systemInstruction: opts.systemInstruction }
             : {}),
@@ -103,6 +113,18 @@ async function callVertex(opts: GenerateOptions): Promise<string> {
         // token cap, and retrying identical input will not help.
         const reason = response.candidates?.[0]?.finishReason ?? 'unknown';
         throw new Error(`Empty response from ${opts.model} (finishReason=${reason})`);
+      }
+
+      const finishReason = response.candidates?.[0]?.finishReason;
+      if (finishReason === 'MAX_TOKENS') {
+        // The body exists but was cut off mid-stream. For JSON output that is
+        // guaranteed-unparseable, and it used to surface downstream as a
+        // confusing "unparseable JSON" error. Name the real cause. On thinking
+        // models the usual culprit is thinking tokens eating the budget, not
+        // the answer itself being too long -- hence thinkingBudget above.
+        throw new Error(
+          `${opts.label} hit maxOutputTokens (${opts.maxOutputTokens ?? 32_768}) and was truncated`,
+        );
       }
 
       console.log(`[gemini] ${opts.label} ok in ${Date.now() - started}ms`);

@@ -59,6 +59,9 @@ export async function buildTranscript(
         ],
         responseSchema: TRANSCRIPT_SCHEMA,
         maxOutputTokens: 65_536,
+        // Transcription is perception, not reasoning. Uncapped, the model can
+        // think for minutes and starve the transcript of output tokens.
+        thinkingBudget: 0,
       });
       return normalise(result.segments ?? [], 0);
     }
@@ -96,6 +99,9 @@ export async function buildTranscript(
       ],
       responseSchema: TRANSCRIPT_SCHEMA,
       maxOutputTokens: 65_536,
+      // Transcription is perception, not reasoning. Uncapped, the model can
+      // think for minutes and starve the transcript of output tokens.
+      thinkingBudget: 0,
     });
     return normalise(result.segments ?? [], 0);
   }
@@ -119,6 +125,9 @@ export async function buildTranscript(
       ],
       responseSchema: TRANSCRIPT_SCHEMA,
       maxOutputTokens: 65_536,
+      // Transcription is perception, not reasoning. Uncapped, the model can
+      // think for minutes and starve the transcript of output tokens.
+      thinkingBudget: 0,
     });
     return normalise(result.segments ?? [], 0);
   }
@@ -171,6 +180,9 @@ export async function buildTranscript(
       ],
       responseSchema: TRANSCRIPT_SCHEMA,
       maxOutputTokens: 65_536,
+      // Transcription is perception, not reasoning. Uncapped, the model can
+      // think for minutes and starve the transcript of output tokens.
+      thinkingBudget: 0,
     });
 
     // Clamp to the segment's own length. A model that reports a timestamp
