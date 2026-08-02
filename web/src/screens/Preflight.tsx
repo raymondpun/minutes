@@ -21,7 +21,7 @@ export default function Preflight({ meta, starting, error, onStart, onBack }: Pr
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [deviceId, setDeviceId] = useState('');
   const [announced, setAnnounced] = useState(false);
-  const [retainDays, setRetainDays] = useState<number | null>(null);
+  const [retainDays, setRetainDays] = useState<number | 'forever' | null>(null);
 
   // The announcement has to describe what actually happens to the recording,
   // which depends on how this deployment is configured. Saying "deleted
@@ -61,9 +61,11 @@ export default function Preflight({ meta, starting, error, onStart, onBack }: Pr
             “I’m recording this meeting to draft the minutes.{' '}
             {retainDays === null
               ? 'The recording is kept only as long as it is needed.'
-              : retainDays > 0
-                ? `The recording is kept for ${retainDays} days so we can check anything that’s disputed, then deleted automatically.`
-                : 'The recording is deleted as soon as the minutes are written.'}{' '}
+              : retainDays === 'forever'
+                ? 'The recording is kept on file so we can check anything that’s disputed later.'
+                : retainDays > 0
+                  ? `The recording is kept for ${retainDays} days so we can check anything that’s disputed, then deleted automatically.`
+                  : 'The recording is deleted as soon as the minutes are written.'}{' '}
             Any objections?”
           </p>
           <p className="hint">

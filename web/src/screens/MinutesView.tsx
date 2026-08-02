@@ -150,8 +150,11 @@ export default function MinutesView({
         <button className="btn-primary" onClick={share}>
           {copied ? 'Copied' : 'Share minutes'}
         </button>
+        <a href={api.docxUrl(meetingId)} download>
+          <button className="btn-secondary">Download as Word (.docx)</button>
+        </a>
         <a href={api.minutesUrl(meetingId)} download>
-          <button className="btn-secondary">Download as Markdown</button>
+          <button className="btn-ghost">Download as Markdown</button>
         </a>
         <button className="btn-ghost" onClick={() => setShowTranscript((v) => !v)}>
           {showTranscript ? 'Hide' : 'Show'} verbatim transcript ({transcript.length}{' '}
@@ -172,7 +175,12 @@ export default function MinutesView({
           <div className="stack" style={{ gap: 9, marginTop: 6 }}>
             {transcript.map((segment, i) => (
               <p className="transcript-line" key={i}>
-                <span className="live-time">{formatTime(segment.start)}</span>
+                <Quote
+                  evidence={{ time: segment.start, quote: '' }}
+                  meetingId={meetingId}
+                  playable={audioAvailable}
+                  timeOnly
+                />
                 <span className="who">{segment.speaker}</span>
                 {segment.text}
               </p>
@@ -328,10 +336,13 @@ function Quote({
   evidence,
   meetingId,
   playable,
+  timeOnly = false,
 }: {
   evidence: Evidence;
   meetingId: string;
   playable: boolean;
+  /** Render just the play control, for the transcript where the text follows. */
+  timeOnly?: boolean;
 }) {
   const [state, setState] = useState<'idle' | 'loading' | 'playing' | 'gone'>('idle');
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -355,20 +366,25 @@ function Quote({
     }
   };
 
+  const control =
+    playable && state !== 'gone' ? (
+      <button
+        className="clip-play"
+        onClick={play}
+        aria-label={`Play the recording at ${formatTime(evidence.time)}`}
+      >
+        {state === 'playing' ? '❚❚' : state === 'loading' ? '…' : '▶'}
+        <span className="t">{formatTime(evidence.time)}</span>
+      </button>
+    ) : (
+      <span className="t">{formatTime(evidence.time)}</span>
+    );
+
+  if (timeOnly) return control;
+
   return (
     <p className="quote">
-      {playable && state !== 'gone' ? (
-        <button
-          className="clip-play"
-          onClick={play}
-          aria-label={`Play the recording at ${formatTime(evidence.time)}`}
-        >
-          {state === 'playing' ? '❚❚' : state === 'loading' ? '…' : '▶'}
-          <span className="t">{formatTime(evidence.time)}</span>
-        </button>
-      ) : (
-        <span className="t">{formatTime(evidence.time)}</span>
-      )}
+      {control}
       “{evidence.quote}”
     </p>
   );

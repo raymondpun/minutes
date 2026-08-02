@@ -15,6 +15,7 @@ import { checkRollCall } from './pipeline/rollcall.js';
 import { buildTranscript } from './pipeline/transcribe.js';
 import { applySpeakerNames, identifySpeakers } from './pipeline/identify.js';
 import { draftMinutes, renderMarkdown } from './pipeline/minutes.js';
+import { renderDocx } from './pipeline/docx.js';
 import { pcmDurationSeconds, pcmToWav, secondsToByteOffset } from './wav.js';
 import type { MeetingMeta, ServerEvent, SpeakerIdentification } from './types.js';
 
@@ -63,7 +64,11 @@ app.get('/api/health', (_req, res) => {
     location: config.location,
     models: config.models,
     singlePassTranscription: Boolean(config.gcsBucket),
-    retainAudioDays: config.retainAudioDays,
+    // JSON.stringify turns Infinity into null, which the client would read as
+    // "unknown" and describe wrongly in the consent announcement.
+    retainAudioDays: Number.isFinite(config.retainAudioDays)
+      ? config.retainAudioDays
+      : 'forever',
   });
 });
 
@@ -262,6 +267,33 @@ app.get(
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="minutes-${id}.md"`);
     res.send(result.markdown);
+  }),
+);
+
+/**
+ * The minutes as a Word document. Markdown is fine for a developer and useless
+ * to a company secretary -- formal minutes get tabled, circulated, put on
+ * letterhead and signed, and all of that happens in Word.
+ */
+app.get(
+  '/api/meetings/:id/minutes.docx',
+  wrap(async (req, res) => {
+    const id = req.params.id!;
+    const result = await store.readMinutes(id);
+    if (!result) return res.status(404).json({ error: 'No minutes yet' });
+
+    const buffer = await renderDocx(result.minutes);
+    const slug = `${result.minutes.date}-${result.minutes.title}`
+      .replace(/[^a-zA-Z0-9\u4e00-\u9fff]+/g, '-')
+      .replace(/^-|-$/g, '')
+      .slice(0, 80);
+
+    res.setHeader(
+      'Content-Type',
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
+    res.setHeader('Content-Disposition', `attachment; filename="minutes-${slug}.docx"`);
+    res.send(buffer);
   }),
 );
 
@@ -469,7 +501,7 @@ async function runDrafting(id: string): Promise<void> {
     // recording does not survive. With retention on it is kept in Cloud Storage
     // so a disputed minute can be settled by listening -- and a bucket
     // lifecycle rule deletes it on schedule rather than never.
-    if (config.retainAudioDays > 0 && gcs.enabled()) {
+    if (config.retainAudioDays !== 0 && gcs.enabled()) {
       await ensureAudioArchived(id);
     } else {
       await gcs.deleteAudio(id).catch(() => {});

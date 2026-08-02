@@ -6,11 +6,14 @@
 // dynamic imports below. No Vertex calls are made by these tests.
 process.env.GOOGLE_CLOUD_PROJECT ??= 'unit-test';
 
+const { inflateRawSync } = await import('node:zlib');
+
 const { pcmToWav, pcmDurationSeconds, secondsToByteOffset } = await import(
   '../dist/wav.js'
 );
 const { renderMarkdown } = await import('../dist/pipeline/minutes.js');
 const { liveChunkBytes } = await import('../dist/config.js');
+const { renderDocx } = await import('../dist/pipeline/docx.js');
 
 let failures = 0;
 function check(name, ok, detail = '') {
@@ -73,6 +76,7 @@ console.log('\n3. Live chunk ramp');
 }
 
 console.log('\n4. Formal minutes rendering');
+let minutesFixture;
 {
   const minutes = {
     bodyName: 'Board of Directors',
@@ -129,6 +133,7 @@ console.log('\n4. Formal minutes rendering');
     nextMeeting: '5 November 2026',
   };
 
+  minutesFixture = minutes;
   const md = renderMarkdown(minutes);
 
   check('body name as h1', md.includes('# Board of Directors'));
@@ -163,7 +168,43 @@ console.log('\n4. Formal minutes rendering');
   check('draft disclaimer', md.includes('Not a signed record until approved'));
 }
 
-console.log('\n5. Renderer survives a sparse model response');
+console.log('\n5. Word export');
+{
+  const docx = await renderDocx(minutesFixture);
+  // A .docx is a zip; "PK\x03\x04" is the local file header magic.
+  check('produces a zip container', docx.subarray(0, 4).toString('latin1') === 'PK\u0003\u0004');
+  check('is a plausible size', docx.length > 5_000, `${docx.length} bytes`);
+
+  // Inflate the parts rather than grepping the raw bytes -- the interesting
+  // content is compressed, so a substring search on the container proves
+  // nothing about what Word will actually open.
+  const parts = unzip(docx);
+  check('has [Content_Types].xml', parts.has('[Content_Types].xml'));
+  check('has word/document.xml', parts.has('word/document.xml'));
+  check(
+    'declares the wordprocessing content type',
+    (parts.get('[Content_Types].xml') ?? '').includes('wordprocessingml.document.main'),
+  );
+
+  const doc = parts.get('word/document.xml') ?? '';
+  check('body name in the document', doc.includes('BOARD OF DIRECTORS'));
+  check('minutes title', doc.includes('Minutes of the Q3 Board Meeting'));
+  check('item heading', doc.includes('Q3 Financial Review'));
+  check('resolution kept as the operative clause', doc.includes('RESOLVED THAT'));
+  check('motion outcome', doc.includes('Outcome: carried'));
+  check('vote tally', doc.includes('4 for, 1 against, 0 abstaining'));
+  check('action owner', doc.includes('Cheryl Lau'));
+  check('unowned action flagged', doc.includes('[TO VERIFY]'));
+  check('sign-off checklist', doc.includes('TO VERIFY BEFORE SIGN-OFF'));
+  check(
+    'Cantonese quote survives untranslated',
+    doc.includes('我 second 呢個 motion'),
+  );
+  check('CJK font hint present for the quotes', doc.includes('PMingLiU'));
+  check('timestamp on the quote', doc.includes('15:12'));
+}
+
+console.log('\n6. Renderer survives a sparse model response');
 {
   const md = renderMarkdown({
     bodyName: 'Team',
@@ -195,6 +236,50 @@ console.log('\n5. Renderer survives a sparse model response');
   check('unparseable date passed through', md.includes('not-a-date'));
   check('missing location handled', md.includes('**Location:** Not recorded'));
   check('missing attendees handled', md.includes('**Present:** Not recorded'));
+}
+
+/**
+ * Minimal zip reader -- enough to pull the stored/deflated parts out of a .docx
+ * without adding a dependency just for the tests.
+ */
+function unzip(buffer) {
+  const parts = new Map();
+  let offset = 0;
+  while (offset + 30 <= buffer.length) {
+    if (buffer.readUInt32LE(offset) !== 0x04034b50) break;
+    const method = buffer.readUInt16LE(offset + 8);
+    let compressedSize = buffer.readUInt32LE(offset + 18);
+    const nameLength = buffer.readUInt16LE(offset + 26);
+    const extraLength = buffer.readUInt16LE(offset + 28);
+    const name = buffer.toString('utf8', offset + 30, offset + 30 + nameLength);
+    const dataStart = offset + 30 + nameLength + extraLength;
+
+    if (compressedSize === 0) {
+      // Streamed entry: size lives in the trailing data descriptor, so find the
+      // next local header or the central directory instead.
+      let next = dataStart;
+      while (next + 4 <= buffer.length) {
+        const sig = buffer.readUInt32LE(next);
+        if (sig === 0x04034b50 || sig === 0x02014b50 || sig === 0x08074b50) break;
+        next++;
+      }
+      compressedSize = next - dataStart;
+    }
+
+    const raw = buffer.subarray(dataStart, dataStart + compressedSize);
+    try {
+      parts.set(name, method === 0 ? raw.toString('utf8') : inflateRawSync(raw).toString('utf8'));
+    } catch {
+      parts.set(name, '');
+    }
+
+    offset = dataStart + compressedSize;
+    // Skip a data descriptor if one follows.
+    if (offset + 4 <= buffer.length && buffer.readUInt32LE(offset) === 0x08074b50) {
+      offset += 16;
+    }
+  }
+  return parts;
 }
 
 function grepLine(text, needle) {

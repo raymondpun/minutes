@@ -26,6 +26,24 @@ export const AUDIO = {
 export const bytesPerSecond =
   AUDIO.sampleRate * AUDIO.channels * AUDIO.bytesPerSample;
 
+/**
+ * Audio retention. `0` deletes as soon as the minutes exist; a number keeps it
+ * that many days; `forever` (or any negative number) keeps it indefinitely.
+ *
+ * Storage is not the constraint -- 16 kHz mono is about 115 MB an hour, so a
+ * hundred two-hour meetings is roughly fifty US cents a month, and pennies once
+ * the lifecycle rules age them into colder classes. The reason to bound it is
+ * that these are recordings of colleagues' voices, and "indefinitely" should be
+ * a decision somebody made rather than a default nobody noticed.
+ */
+function parseRetention(raw: string | undefined): number {
+  if (raw === undefined || raw === '') return 30;
+  if (/^forever$|^never$|^indefinite/i.test(raw.trim())) return Number.POSITIVE_INFINITY;
+  const n = Number(raw);
+  if (!Number.isFinite(n)) return 30;
+  return n < 0 ? Number.POSITIVE_INFINITY : n;
+}
+
 export const config = {
   port: Number(process.env.PORT ?? 8080),
 
@@ -54,7 +72,7 @@ export const config = {
    * a records-retention decision nobody consciously made; a month is long
    * enough to settle an argument about last week's meeting.
    */
-  retainAudioDays: Number(process.env.RETAIN_AUDIO_DAYS ?? 30),
+  retainAudioDays: parseRetention(process.env.RETAIN_AUDIO_DAYS),
 
   dataDir: path.resolve(process.env.DATA_DIR ?? './data'),
 

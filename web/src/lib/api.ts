@@ -32,7 +32,7 @@ export const api = {
       location: string;
       models: Record<string, string>;
       singlePassTranscription: boolean;
-      retainAudioDays: number;
+      retainAudioDays: number | 'forever';
     }>('/api/health'),
 
   listMeetings: () => request<MeetingMeta[]>('/api/meetings'),
@@ -77,6 +77,7 @@ export const api = {
   clipUrl: (id: string, at: number) =>
     `/api/meetings/${id}/clip?at=${encodeURIComponent(Math.max(0, Math.round(at)))}`,
 
+  docxUrl: (id: string) => `/api/meetings/${id}/minutes.docx`,
   minutesUrl: (id: string) => `/api/meetings/${id}/minutes.md`,
   transcriptUrl: (id: string) => `/api/meetings/${id}/transcript.txt`,
 };

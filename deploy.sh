@@ -58,13 +58,41 @@ if [[ -n "${GCS_BUCKET:-}" ]]; then
   RETAIN_DAYS="${RETAIN_AUDIO_DAYS:-30}"
   ENV_VARS="${ENV_VARS},RETAIN_AUDIO_DAYS=${RETAIN_DAYS}"
 
-  if [[ "$RETAIN_DAYS" -gt 0 ]]; then
+  LIFECYCLE=$(mktemp)
+  if [[ "$RETAIN_DAYS" == "forever" ]]; then
+    # Keeping recordings indefinitely is cheap, but only if they are allowed to
+    # get colder. Audio nobody has played in a year does not belong in Standard
+    # storage at 20x the price of Archive. Minutes and transcripts are tiny and
+    # read often, so only audio.wav is tiered.
+    echo "==> Recordings kept indefinitely; tiering them to colder storage over time"
+    cat > "$LIFECYCLE" <<'JSON'
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": { "type": "SetStorageClass", "storageClass": "NEARLINE" },
+        "condition": { "age": 30, "matchesSuffix": ["audio.wav"] }
+      },
+      {
+        "action": { "type": "SetStorageClass", "storageClass": "COLDLINE" },
+        "condition": { "age": 90, "matchesSuffix": ["audio.wav"] }
+      },
+      {
+        "action": { "type": "SetStorageClass", "storageClass": "ARCHIVE" },
+        "condition": { "age": 365, "matchesSuffix": ["audio.wav"] }
+      }
+    ]
+  }
+}
+JSON
+    gcloud storage buckets update "gs://${GCS_BUCKET}" \
+      --lifecycle-file="$LIFECYCLE" --project "$PROJECT" >/dev/null
+  elif [[ "$RETAIN_DAYS" -gt 0 ]]; then
     # Enforce retention at the bucket rather than in application code. A
     # deletion that depends on the app remembering to run is a deletion that
     # eventually does not happen, and this object is a recording of people's
     # voices. Only audio ages out -- minutes and transcripts are kept.
     echo "==> Setting a ${RETAIN_DAYS}-day lifecycle rule on the recordings"
-    LIFECYCLE=$(mktemp)
     cat > "$LIFECYCLE" <<JSON
 {
   "lifecycle": {
@@ -82,8 +110,8 @@ if [[ -n "${GCS_BUCKET:-}" ]]; then
 JSON
     gcloud storage buckets update "gs://${GCS_BUCKET}" \
       --lifecycle-file="$LIFECYCLE" --project "$PROJECT" >/dev/null
-    rm -f "$LIFECYCLE"
   fi
+  rm -f "$LIFECYCLE"
 fi
 
 echo "==> Deploying"

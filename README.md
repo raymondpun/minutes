@@ -113,7 +113,8 @@ pipeline.
   actions with owner and due date
 - Anchor every resolution and action to a timestamp and a verbatim quote
 - Flag what it could not establish, instead of smoothing it into confident prose
-- Let you play back the audio behind any quote, for 30 days
+- Let you play back the audio behind any quote or transcript line
+- Export to Word (.docx), Markdown, JSON or plain text
 - Pause and resume, releasing the mic so the room can see it has stopped
 
 **Will not**
@@ -238,26 +239,66 @@ That is what makes scale-to-zero safe rather than lossy.
 
 **Without a bucket, run it locally**, or past meetings will disappear.
 
-The recording itself lives at `gs://<bucket>/meetings/<id>/audio.wav` and is
-deleted by a bucket lifecycle rule after `RETAIN_AUDIO_DAYS` (30 by default).
-Retention is enforced by the bucket, not by application code — a deletion that
+### Getting the minutes out
+
+| Format | How | Use |
+| --- | --- | --- |
+| **Word `.docx`** | Download button, or `GET /api/meetings/<id>/minutes.docx` | The one that matters. Tabled, circulated, put on letterhead, signed. Serif body with 明體 for the Chinese quotes, real tables for the action items. |
+| Markdown `.md` | Download button, or `/minutes.md` | Pasting into Notion, Slack, a wiki, git. |
+| JSON | `minutes.json` in the meeting folder | Feeding another system. Every resolution, motion and action as structured data with its evidence. |
+| Plain text | `/transcript.txt` | The verbatim transcript. |
+| Share sheet | "Share minutes" | AirDrop, WhatsApp, email — whatever the phone offers. |
+
+### Retention
+
+The recording lives at `gs://<bucket>/meetings/<id>/audio.wav`.
+
+| `RETAIN_AUDIO_DAYS` | What happens |
+| --- | --- |
+| `0` | Deleted the moment the minutes are drafted. Strongest posture — you can tell the room the recording does not survive. |
+| `30` (default) | Bucket lifecycle rule deletes it after 30 days. |
+| `forever` | Kept indefinitely; `deploy.sh` tiers it Nearline at 30d, Coldline at 90d, Archive at 365d. |
+
+Storage genuinely is not the constraint. 16 kHz mono is ~115 MB an hour, so a
+two-hour meeting is about half a US cent a month, and a hundred of them roughly
+fifty cents — pennies once tiered. The reason to bound it is that these are
+recordings of colleagues' voices, and "indefinitely" should be a decision
+somebody made rather than a default nobody noticed.
+
+Retention is enforced by the bucket, never by application code: a deletion that
 depends on the app remembering to run is a deletion that eventually does not
-happen, and this object is a recording of people's voices.
+happen. Only `audio.wav` ages out — minutes and transcripts are always kept.
 
-Set `RETAIN_AUDIO_DAYS=0` to delete it as soon as the minutes exist. The consent
-announcement on the pre-flight screen changes to match, so it never tells the
-room something untrue.
+Whatever you set, the consent announcement on the pre-flight screen reads the
+configured value, so it never tells the room something untrue.
 
-## Playing back the evidence
+## How the audio is referenced
 
-Every resolution, motion, action and reported figure carries a timestamp and the
-verbatim quote in the language spoken. While the recording is retained, each of
-those quotes has a play button that fetches a few seconds of audio around the
-moment.
+By **seconds from the start of the recording**, and nothing else. There is one
+audio file per meeting, so a timestamp is a complete address:
 
-That matters because the minutes are in English and the meeting was not. The
-English is a translation nobody can check from the page. With the quote you can
-check the words; with the audio you can check the quote.
+```
+transcript segment   { start: 1290.4, end: 1296.1, speaker, text }
+summary block        { start: 1200, end: 1500, heading, bullets }
+evidence on a claim  { time: 912, quote: "我 second 呢個 motion" }
+                              │
+                              ▼
+        byte offset = seconds × 32000   (16 kHz × 1 channel × 2 bytes)
+```
+
+`GET /api/meetings/<id>/clip?at=912&pad=6` reads that byte range — from local
+disk, or a ranged read straight out of Cloud Storage — and returns a few seconds
+as a standalone WAV. A phone fetches kilobytes, not the 230 MB file.
+
+So every quote in the minutes, and every line of the transcript, has a play
+button. That matters because the minutes are in English and the meeting was not:
+the English is a translation nobody can check from the page. The quote lets you
+check the words; the audio lets you check the quote.
+
+**One caveat.** Timestamps are *recording* seconds, not wall-clock. If you paused
+for ten minutes, the timeline compresses and `01:00:00` in the minutes is not an
+hour after the meeting started. Consistent everywhere, but worth knowing. The
+pause positions are in `meta.json` if you need to map back.
 
 ## Pausing
 
