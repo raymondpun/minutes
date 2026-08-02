@@ -369,7 +369,10 @@ app.get(
     if (!result) return res.status(404).json({ error: 'No minutes yet' });
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="minutes-${id}.md"`);
-    res.send(result.markdown);
+    // BOM: the HTTP charset header dies with the download. Editors that open
+    // the saved file guess the encoding, and a guess of Big5 or GBK turns the
+    // Chinese into mojibake. The BOM survives inside the file and settles it.
+    res.send('\ufeff' + result.markdown);
   }),
 );
 
@@ -410,7 +413,10 @@ app.get(
       .join('\n');
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Content-Disposition', `attachment; filename="transcript-${id}.txt"`);
-    res.send(text);
+    // BOM for the same reason as minutes.md below: once saved, the file's
+    // encoding is whatever the opening app guesses, and phone viewers guess
+    // legacy code pages at bare Chinese text. The BOM settles it.
+    res.send('\ufeff' + text);
   }),
 );
 
