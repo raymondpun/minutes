@@ -101,6 +101,10 @@ app.get('/api/health', (_req, res) => {
 app.get(
   '/api/meetings',
   wrap(async (_req, res) => {
+    // A few seconds after a cold start, until the index restore finishes, the
+    // local list is empty or partial. Waiting is invisible; an empty history
+    // is alarming. See the boot block for the promise.
+    await indexRestored;
     res.json(await store.listMeetings());
   }),
 );
@@ -931,7 +935,13 @@ fs.mkdirSync(path.join(config.dataDir, 'meetings'), { recursive: true });
 // past meetings are restored from Cloud Storage before anything else. Then pick
 // up any pipeline a previous instance was killed in the middle of, rather than
 // leaving a meeting stuck reporting progress nothing is making.
-void (async () => {
+//
+// The restore is a named promise because GET /api/meetings awaits it: the
+// server starts taking requests immediately, and for the few seconds the index
+// is still streaming out of the bucket, serving the list would show it empty --
+// which reads as "all my meetings are gone" to anyone opening the app right
+// after a deploy.
+const indexRestored: Promise<void> = (async () => {
   try {
     if (gcs.enabled()) {
       const started = Date.now();
@@ -942,6 +952,15 @@ void (async () => {
         );
       }
     }
+  } catch (err) {
+    console.warn('[boot] archive restore failed:', err);
+  }
+})();
+
+// The stall scan stays off the request path: resuming a transcription can run
+// for minutes, and the meeting list should not wait on that.
+void indexRestored.then(async () => {
+  try {
     // One at a time. Each stalled meeting can allocate a large buffer and a
     // model call, and starting all of them at once on a cold instance is how a
     // memory-capped container dies at boot -- which creates more stalled
@@ -950,9 +969,9 @@ void (async () => {
       resumeIfStalled(meeting);
     }
   } catch (err) {
-    console.warn('[boot] archive restore / stall scan failed:', err);
+    console.warn('[boot] stall scan failed:', err);
   }
-})();
+});
 
 server.listen(config.port, () => {
   console.log(`minutes server on :${config.port}`);
