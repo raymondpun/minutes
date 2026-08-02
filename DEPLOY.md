@@ -42,7 +42,21 @@ Note the **project ID** (like `ray-minutes-app`), not the display name.
 > eventually consistent and lags by a minute or two after creation. Confirm it
 > exists with `gcloud projects describe ray-minutes-app`, which is immediate.
 >
+> **"I can't find the project in the console"** — a project created from the CLI
+> without `--organization` has **no parent organization**, and the console's
+> project picker filters by organization by default. It is not missing, it is
+> outside the filter. Switch the scope dropdown in the picker to **No
+> organization**, or skip the picker with a URL that pins the project:
+> `https://console.cloud.google.com/run?project=ray-minutes-app`
+>
 > **"lacks an 'environment' tag"** — advisory, not an error. Ignore it.
+
+> **Worth deciding now, if this is for work.** A project with no organization
+> belongs to the Google account that created it, not to a company. For an app
+> that stores recordings and minutes of board meetings, that is a governance
+> question: if that account is lost or closed, so is the archive. Projects can
+> be moved into an organization later (`gcloud beta projects move`), but it is
+> easier to decide before there is anything in it worth keeping.
 
 ## 1.2 Link billing — and verify it
 
@@ -504,6 +518,8 @@ scope to this project → alert at 50%, 90%, 100%.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | Project missing from `gcloud projects list` | The list index lags | `gcloud projects describe <id>` — if ACTIVE, carry on |
+| Project or service invisible in the console | The project has no organization, and the picker filters by org | Set the picker scope to **No organization**, or use `console.cloud.google.com/run?project=<id>` |
+| Console shows nothing, gcloud shows everything | Browser signed into a different Google account than gcloud | Compare `gcloud config get account` with the console's avatar |
 | "lacks an 'environment' tag" | Advisory org nudge | Ignore |
 | `PERMISSION_DENIED` on any Vertex call | Billing not linked, or API off | `gcloud billing projects describe <id>` must say `billingEnabled: true` |
 | "Could not load the default credentials" | ADC missing | `gcloud auth application-default login` |
