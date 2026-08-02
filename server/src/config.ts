@@ -56,7 +56,7 @@ export const config = {
   port: Number(process.env.PORT ?? 8080),
 
   projectId: required('GOOGLE_CLOUD_PROJECT'),
-  location: process.env.GOOGLE_CLOUD_LOCATION ?? 'asia-southeast1',
+  location: process.env.GOOGLE_CLOUD_LOCATION ?? 'europe-west1',
 
   models: {
     live: process.env.MODEL_LIVE ?? 'gemini-3.6-flash',

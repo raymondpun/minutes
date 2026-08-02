@@ -148,7 +148,13 @@ try {
     fix = 'gcloud services enable aiplatform.googleapis.com --project ' + config.projectId +
       '\n         and grant roles/aiplatform.user to whoever you authenticated as.';
   } else if (/not found|404|does not exist|unsupported/i.test(message)) {
-    fix = `"${config.models.minutes}" may not be served in ${config.location}. Try MODEL_MINUTES/MODEL_TRANSCRIBE with a model your region has, or switch GOOGLE_CLOUD_LOCATION.`;
+    fix =
+      `"${config.models.minutes}" is not served in ${config.location}.\n` +
+      `         Either point the models at one that is, e.g.\n` +
+      `           MODEL_TRANSCRIBE=gemini-3.5-flash MODEL_MINUTES=gemini-3.5-flash\n` +
+      `         or use the global endpoint, which routes to wherever the model lives\n` +
+      `         but gives up regional data residency:\n` +
+      `           GOOGLE_CLOUD_LOCATION=global`;
   } else if (/billing/i.test(message)) {
     fix = 'Enable billing on the project.';
   }

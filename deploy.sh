@@ -12,7 +12,7 @@
 set -euo pipefail
 
 PROJECT="${1:-${GOOGLE_CLOUD_PROJECT:-}}"
-REGION="${2:-${GOOGLE_CLOUD_LOCATION:-asia-southeast1}}"
+REGION="${2:-${GOOGLE_CLOUD_LOCATION:-europe-west1}}"
 SERVICE="minutes"
 
 if [[ -z "$PROJECT" ]]; then

@@ -102,13 +102,18 @@ Bucket names are globally unique, so prefix with your project ID:
 
 ```bash
 gcloud storage buckets create gs://ray-minutes-app-recordings \
-  --location=asia-east2 \
+  --location=europe-west1 \
   --uniform-bucket-level-access
 ```
 
-Pick the region closest to you and **use the same one throughout**:
-`asia-east2` Hong Kong · `asia-southeast1` Singapore · `europe-west2` London ·
-`us-central1` Iowa.
+Use the same region throughout — the bucket, the service and Vertex.
+
+> **Check the model is served there before you rely on it.** Vertex model
+> availability is per-region and `gemini-3.6-flash` is recent. `europe-west1`
+> (Belgium) definitely serves Gemini and is the right choice for EU data
+> residency, but if 3.6 Flash has not reached it, `/api/health` and
+> `npm run check` will say so. See
+> [If the model is not in your region](#if-the-model-is-not-in-your-region).
 
 ---
 
@@ -163,7 +168,7 @@ that upload.)
 export GCS_BUCKET=ray-minutes-app-recordings
 export RETAIN_AUDIO_DAYS=30
 
-./deploy.sh ray-minutes-app asia-east2
+./deploy.sh ray-minutes-app europe-west1
 ```
 
 First build 5–10 minutes; later ones 2–3. Cloud Shell will ask you to
@@ -196,14 +201,14 @@ not need a `.env` at all to run the service.
 See what the service is actually running with:
 
 ```bash
-gcloud run services describe minutes --region asia-east2 \
+gcloud run services describe minutes --region europe-west1 \
   --format='value(spec.template.spec.containers[0].env)'
 ```
 
 Change one without redeploying — this restarts the service with the new value:
 
 ```bash
-gcloud run services update minutes --region asia-east2 \
+gcloud run services update minutes --region europe-west1 \
   --update-env-vars RETAIN_AUDIO_DAYS=0
 ```
 
@@ -214,7 +219,7 @@ gcloud run services update minutes --region asia-east2 \
 ## 3.1 Confirm the config landed
 
 ```bash
-URL=$(gcloud run services describe minutes --region asia-east2 --format='value(status.url)')
+URL=$(gcloud run services describe minutes --region europe-west1 --format='value(status.url)')
 curl -s $URL/api/health
 ```
 
@@ -222,7 +227,7 @@ curl -s $URL/api/health
 {
   "ok": true,
   "project": "ray-minutes-app",
-  "location": "asia-east2",
+  "location": "europe-west1",
   "models": { "transcribe": "gemini-3.6-flash", ... },
   "singlePassTranscription": true,
   "retainAudioDays": 30
@@ -264,7 +269,7 @@ npm install
 
 cat > .env <<'EOF'
 GOOGLE_CLOUD_PROJECT=ray-minutes-app
-GOOGLE_CLOUD_LOCATION=asia-east2
+GOOGLE_CLOUD_LOCATION=europe-west1
 GCS_BUCKET=ray-minutes-app-recordings
 EOF
 
@@ -287,6 +292,37 @@ cat preflight-minutes.md
 That prints the transcript, the name mapping with its evidence, and counts
 colloquial Cantonese against 書面語 so drift shows up as a number rather than a
 hunch.
+
+## 3.4 If the model is not in your region
+
+`europe-west1` serves Gemini, but `gemini-3.6-flash` shipped in July 2026 and
+regional rollout lags. If `/api/health` or `npm run check` reports the model as
+not found, you have three options — none needs a redeploy.
+
+**a) Use a model that is served there.** `gemini-3.5-flash` has EU deployments
+and is the closest sibling:
+
+```bash
+gcloud run services update minutes --region europe-west1 \
+  --update-env-vars MODEL_TRANSCRIBE=gemini-3.5-flash,MODEL_MINUTES=gemini-3.5-flash,MODEL_LIVE=gemini-3.5-flash,MODEL_DIGEST=gemini-3.5-flash
+```
+
+**b) Use the global endpoint.** Routes to wherever the model is available:
+
+```bash
+gcloud run services update minutes --region europe-west1 \
+  --update-env-vars GOOGLE_CLOUD_LOCATION=global
+```
+
+Fastest fix, but **it gives up the data residency guarantee** — inference may
+happen outside the EU. If Belgium was chosen for residency rather than latency,
+prefer (a).
+
+**c) Move to a region that has it**, e.g. `us-central1`. Same residency
+trade-off as (b), plus your bucket is then in a different region from Vertex.
+
+The service and the bucket stay in `europe-west1` in every case; only where the
+inference happens changes.
 
 ---
 
@@ -324,7 +360,7 @@ gcloud builds triggers create github \
   --repo-owner=raymondpun \
   --branch-pattern='^develop$' \
   --build-config=cloudbuild.yaml \
-  --region=asia-east2
+  --region=europe-west1
 ```
 
 You will be sent to the console once to **connect the GitHub repository** and
@@ -336,7 +372,7 @@ Until then, updating is Part 2 again — still no `npm install`:
 ```bash
 cd ~/minutes && git pull
 export GCS_BUCKET=ray-minutes-app-recordings
-./deploy.sh ray-minutes-app asia-east2
+./deploy.sh ray-minutes-app europe-west1
 ```
 
 ---
@@ -348,7 +384,7 @@ Set on Cloud Run by `deploy.sh` via `--set-env-vars`. **None are secret.**
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `GOOGLE_CLOUD_PROJECT` | *required* | Which project to bill and call |
-| `GOOGLE_CLOUD_LOCATION` | `asia-southeast1` | Vertex region |
+| `GOOGLE_CLOUD_LOCATION` | `europe-west1` | Vertex region |
 | `GCS_BUCKET` | *unset* | Single-pass transcription, durable history, audio retention |
 | `RETAIN_AUDIO_DAYS` | `30` | `0` = delete at draft · `N` = N days · `forever` = keep, tiered to colder storage |
 | `MODEL_TRANSCRIBE` | `gemini-3.6-flash` | The authoritative transcript |
@@ -362,14 +398,14 @@ Set on Cloud Run by `deploy.sh` via `--set-env-vars`. **None are secret.**
 Change one without redeploying:
 
 ```bash
-gcloud run services update minutes --region asia-east2 \
+gcloud run services update minutes --region europe-west1 \
   --update-env-vars RETAIN_AUDIO_DAYS=0
 ```
 
 See what is currently set:
 
 ```bash
-gcloud run services describe minutes --region asia-east2 \
+gcloud run services describe minutes --region europe-west1 \
   --format='value(spec.template.spec.containers[0].env)'
 ```
 
@@ -406,7 +442,7 @@ gcloud secrets add-iam-policy-binding my-integration-token \
   --role="roles/secretmanager.secretAccessor"
 
 # Mount it as an env var
-gcloud run services update minutes --region asia-east2 \
+gcloud run services update minutes --region europe-west1 \
   --set-secrets MY_INTEGRATION_TOKEN=my-integration-token:latest
 ```
 
@@ -442,15 +478,15 @@ only the service account can read the recordings.
 ```bash
 cd ~/minutes && git pull
 export GCS_BUCKET=ray-minutes-app-recordings
-./deploy.sh ray-minutes-app asia-east2
+./deploy.sh ray-minutes-app europe-west1
 ```
 
 Cloud Run keeps every revision:
 
 ```bash
-gcloud run revisions list --service minutes --region asia-east2
+gcloud run revisions list --service minutes --region europe-west1
 
-gcloud run services update-traffic minutes --region asia-east2 \
+gcloud run services update-traffic minutes --region europe-west1 \
   --to-revisions minutes-00007-abc=100
 ```
 
@@ -479,7 +515,7 @@ scope to this project → alert at 50%, 90%, 100%.
 | "lacks an 'environment' tag" | Advisory org nudge | Ignore |
 | `PERMISSION_DENIED` on any Vertex call | Billing not linked, or API off | `gcloud billing projects describe <id>` must say `billingEnabled: true` |
 | "Could not load the default credentials" | ADC missing | `gcloud auth application-default login` |
-| "Publisher Model … not found" | Model not served in that region | `--update-env-vars GOOGLE_CLOUD_LOCATION=us-central1` |
+| "Publisher Model … not found" | Model not served in that region | See [3.4](#34-if-the-model-is-not-in-your-region) — swap the model, or use the global endpoint |
 | Build fails immediately | Cloud Build or Artifact Registry API off | `gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com` |
 | `git clone` asks for a password and rejects it | GitHub wants a token, not a password | `gh auth login`, or use a PAT |
 | Cloned repo looks empty | You are on `main`, which is an empty commit | `git checkout develop` |
@@ -494,7 +530,7 @@ scope to this project → alert at 50%, 90%, 100%.
 Logs:
 
 ```bash
-gcloud run services logs read minutes --region asia-east2 --limit 100
+gcloud run services logs read minutes --region europe-west1 --limit 100
 ```
 
 ---
@@ -502,7 +538,7 @@ gcloud run services logs read minutes --region asia-east2 --limit 100
 # Tearing it down
 
 ```bash
-gcloud run services delete minutes --region asia-east2
+gcloud run services delete minutes --region europe-west1
 
 # Deletes every recording, transcript and set of minutes. Irreversible.
 gcloud storage rm -r gs://ray-minutes-app-recordings

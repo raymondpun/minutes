@@ -179,7 +179,7 @@ Browsers refuse microphone access outside a secure context, so a phone
 **cannot** use `http://192.168.x.x:5173`. Two options:
 
 ```bash
-./deploy.sh YOUR_PROJECT_ID asia-east2     # Cloud Run, real HTTPS, ~5 min
+./deploy.sh YOUR_PROJECT_ID europe-west1     # Cloud Run, real HTTPS, ~5 min
 ```
 
 **→ [DEPLOY.md](DEPLOY.md) is the full step-by-step, and it needs nothing
@@ -205,7 +205,7 @@ home screen keeps Safari's chrome from stealing taps mid-meeting.
 Optional, and worth it above about 40 minutes:
 
 ```bash
-gcloud storage buckets create gs://your-minutes-audio --location=asia-east2
+gcloud storage buckets create gs://your-minutes-audio --location=europe-west1
 echo "GCS_BUCKET=your-minutes-audio" >> .env
 ```
 
