@@ -677,10 +677,14 @@ wss.on('connection', (ws: WebSocket, req) => {
         status: 'recording',
         rollCallEndedAt: nowSeconds,
       });
+      // Count, not names. Cloud Logging retains for 30 days by default and is
+      // readable by anyone with project viewer -- a wider audience than the
+      // meeting had. This was the only line putting attendees' names there,
+      // which sits badly next to an app that asks the room for consent and
+      // deletes the recording on a schedule.
       console.log(
-        `[roll-call] ended at ${nowSeconds.toFixed(0)}s (${verdict.reason}); heard: ${
-          verdict.namesHeard.join(', ') || 'nobody'
-        }`,
+        `[roll-call] ended at ${nowSeconds.toFixed(0)}s (${verdict.reason}); ` +
+          `${verdict.namesHeard.length} name(s) heard`,
       );
       send({ type: 'roll_call_ended', at: nowSeconds, namesHeard: verdict.namesHeard });
       void updated;
