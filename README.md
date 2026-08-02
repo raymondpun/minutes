@@ -129,7 +129,10 @@ pipeline.
 
 ## Setup
 
-You need a GCP project with billing, and `gcloud`.
+You need a GCP project with billing, and `gcloud`. **There are no API keys.**
+Vertex authenticates with Application Default Credentials — one `gcloud`
+command locally, and the attached service account on Cloud Run. Nothing to
+create, paste, rotate or leak; the only thing in `.env` is the project id.
 
 ```bash
 git clone <this repo> && cd minutes
@@ -137,10 +140,38 @@ npm install
 cp .env.example .env      # set GOOGLE_CLOUD_PROJECT
 gcloud auth application-default login
 gcloud services enable aiplatform.googleapis.com
+
+npm run check             # confirm it can actually reach Vertex
 npm run dev               # server :8080, web :5173
 ```
 
 `http://localhost:5173` works on your laptop for testing.
+
+### Check it works before you need it
+
+```bash
+npm run check
+```
+
+Four tiny calls — a fraction of a cent — verifying credentials, that the model
+is served in your region, that structured output is honoured, that inline audio
+is accepted, and that the bucket is readable and writable. Every failure prints
+the exact command that fixes it.
+
+The more valuable mode takes a real recording:
+
+```bash
+npm run check -- ~/Downloads/test.m4a
+```
+
+Record two minutes on your phone with a colleague, both saying your names, and
+run it through. It prints the transcript with speakers, the name mapping and
+the evidence behind it, drafts the minutes to `preflight-minutes.md`, and
+checks the one failure that hides best: whether the model is quietly rewriting
+spoken Cantonese (係 唔係 嘅 咗) into formal 書面語 (是 不是 的 了), which would
+destroy the transcript's value as evidence.
+
+Do this before a meeting that matters.
 
 ### Getting it onto a phone
 
