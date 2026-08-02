@@ -106,14 +106,8 @@ gcloud storage buckets create gs://ray-minutes-app-recordings \
   --uniform-bucket-level-access
 ```
 
-Use the same region throughout — the bucket, the service and Vertex.
-
-> **Check the model is served there before you rely on it.** Vertex model
-> availability is per-region and `gemini-3.6-flash` is recent. `europe-west1`
-> (Belgium) definitely serves Gemini and is the right choice for EU data
-> residency, but if 3.6 Flash has not reached it, `/api/health` and
-> `npm run check` will say so. See
-> [If the model is not in your region](#if-the-model-is-not-in-your-region).
+Use the same region for the bucket and the service. **Vertex is configured
+separately** — see [Two locations, not one](#two-locations-not-one).
 
 ---
 
@@ -171,6 +165,9 @@ export RETAIN_AUDIO_DAYS=30
 ./deploy.sh ray-minutes-app europe-west1
 ```
 
+The second argument is the **Cloud Run region** — where the container and the
+bucket live. Vertex is separate and defaults to the global endpoint; see below.
+
 First build 5–10 minutes; later ones 2–3. Cloud Shell will ask you to
 **Authorize** the first `gcloud` call — click it.
 
@@ -186,7 +183,34 @@ The script:
 6. Builds and deploys
 7. Prints your HTTPS URL
 
-## 2.3 Where the configuration actually lives
+## 2.3 Two locations, not one
+
+These are different settings and conflating them will bite you:
+
+| | Value | What it controls |
+| --- | --- | --- |
+| **Cloud Run region** | `europe-west1` | Where the container runs and the bucket lives. Must be a real region. |
+| **`GOOGLE_CLOUD_LOCATION`** | `global` | Where Vertex serves the model from. |
+
+**Why they differ.** `gemini-3.6-flash` is offered on Vertex's **global
+endpoint**, not through EU multi-region endpoints. And `global` is not a valid
+Cloud Run region, so one variable cannot be both — `deploy.sh` keeps them apart.
+
+**The trade-off, stated plainly.** Your service and your recordings stay in
+`europe-west1`. Inference on the global endpoint **may happen outside the EU**.
+If you chose Belgium for data residency rather than latency, that matters.
+
+To keep inference in region instead, at the cost of an older model:
+
+```bash
+gcloud run services update minutes --region europe-west1 \
+  --update-env-vars GOOGLE_CLOUD_LOCATION=europe-west1,MODEL_TRANSCRIBE=gemini-3.5-flash,MODEL_MINUTES=gemini-3.5-flash,MODEL_LIVE=gemini-3.5-flash,MODEL_DIGEST=gemini-3.5-flash
+```
+
+`gemini-3.5-flash` has EU deployments. You cannot currently have both the newest
+model and EU-only processing — pick which one you need.
+
+## 2.4 Where the configuration actually lives
 
 There are two separate channels, and confusing them is the easiest mistake here:
 
@@ -227,7 +251,7 @@ curl -s $URL/api/health
 {
   "ok": true,
   "project": "ray-minutes-app",
-  "location": "europe-west1",
+  "location": "global",
   "models": { "transcribe": "gemini-3.6-flash", ... },
   "singlePassTranscription": true,
   "retainAudioDays": 30
@@ -293,39 +317,6 @@ That prints the transcript, the name mapping with its evidence, and counts
 colloquial Cantonese against 書面語 so drift shows up as a number rather than a
 hunch.
 
-## 3.4 If the model is not in your region
-
-`europe-west1` serves Gemini, but `gemini-3.6-flash` shipped in July 2026 and
-regional rollout lags. If `/api/health` or `npm run check` reports the model as
-not found, you have three options — none needs a redeploy.
-
-**a) Use a model that is served there.** `gemini-3.5-flash` has EU deployments
-and is the closest sibling:
-
-```bash
-gcloud run services update minutes --region europe-west1 \
-  --update-env-vars MODEL_TRANSCRIBE=gemini-3.5-flash,MODEL_MINUTES=gemini-3.5-flash,MODEL_LIVE=gemini-3.5-flash,MODEL_DIGEST=gemini-3.5-flash
-```
-
-**b) Use the global endpoint.** Routes to wherever the model is available:
-
-```bash
-gcloud run services update minutes --region europe-west1 \
-  --update-env-vars GOOGLE_CLOUD_LOCATION=global
-```
-
-Fastest fix, but **it gives up the data residency guarantee** — inference may
-happen outside the EU. If Belgium was chosen for residency rather than latency,
-prefer (a).
-
-**c) Move to a region that has it**, e.g. `us-central1`. Same residency
-trade-off as (b), plus your bucket is then in a different region from Vertex.
-
-The service and the bucket stay in `europe-west1` in every case; only where the
-inference happens changes.
-
----
-
 # Part 4 — Put it on your phone
 
 Open the URL from 2.3 in the phone's browser and add it to the home screen:
@@ -384,7 +375,8 @@ Set on Cloud Run by `deploy.sh` via `--set-env-vars`. **None are secret.**
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `GOOGLE_CLOUD_PROJECT` | *required* | Which project to bill and call |
-| `GOOGLE_CLOUD_LOCATION` | `europe-west1` | Vertex region |
+| `GOOGLE_CLOUD_LOCATION` | `global` | Where **Vertex** serves the model. Not the Cloud Run region |
+| `CLOUD_RUN_REGION` | `europe-west1` | Where the container and bucket live. Set as `deploy.sh`'s second argument |
 | `GCS_BUCKET` | *unset* | Single-pass transcription, durable history, audio retention |
 | `RETAIN_AUDIO_DAYS` | `30` | `0` = delete at draft · `N` = N days · `forever` = keep, tiered to colder storage |
 | `MODEL_TRANSCRIBE` | `gemini-3.6-flash` | The authoritative transcript |
@@ -515,7 +507,8 @@ scope to this project → alert at 50%, 90%, 100%.
 | "lacks an 'environment' tag" | Advisory org nudge | Ignore |
 | `PERMISSION_DENIED` on any Vertex call | Billing not linked, or API off | `gcloud billing projects describe <id>` must say `billingEnabled: true` |
 | "Could not load the default credentials" | ADC missing | `gcloud auth application-default login` |
-| "Publisher Model … not found" | Model not served in that region | See [3.4](#34-if-the-model-is-not-in-your-region) — swap the model, or use the global endpoint |
+| "Publisher Model … not found" | Model not served at that location | `GOOGLE_CLOUD_LOCATION=global` (default), or pin to a region and use a model served there — see [2.3](#23-two-locations-not-one) |
+| `Invalid region "global"` from gcloud | Passing the Vertex location where a Cloud Run region belongs | They are separate — `deploy.sh <project> <cloud-run-region>` |
 | Build fails immediately | Cloud Build or Artifact Registry API off | `gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com` |
 | `git clone` asks for a password and rejects it | GitHub wants a token, not a password | `gh auth login`, or use a PAT |
 | Cloned repo looks empty | You are on `main`, which is an empty commit | `git checkout develop` |

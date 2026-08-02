@@ -56,7 +56,17 @@ export const config = {
   port: Number(process.env.PORT ?? 8080),
 
   projectId: required('GOOGLE_CLOUD_PROJECT'),
-  location: process.env.GOOGLE_CLOUD_LOCATION ?? 'europe-west1',
+  /**
+   * Where Vertex serves the model from -- not where this container runs.
+   *
+   * gemini-3.6-flash is offered on the global endpoint rather than through EU
+   * multi-region endpoints, so this defaults to "global" while the service and
+   * the recordings stay in whichever region you deployed to. The consequence is
+   * worth being explicit about: inference may happen outside that region. If
+   * that matters more than having the newest model, set this to your region and
+   * point the MODEL_* variables at one served there.
+   */
+  location: process.env.GOOGLE_CLOUD_LOCATION ?? 'global',
 
   models: {
     live: process.env.MODEL_LIVE ?? 'gemini-3.6-flash',

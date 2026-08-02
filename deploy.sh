@@ -12,7 +12,21 @@
 set -euo pipefail
 
 PROJECT="${1:-${GOOGLE_CLOUD_PROJECT:-}}"
-REGION="${2:-${GOOGLE_CLOUD_LOCATION:-europe-west1}}"
+
+# Where the container runs, and where the bucket lives. A real region.
+REGION="${2:-${CLOUD_RUN_REGION:-europe-west1}}"
+
+# Where Vertex serves the model from. Deliberately separate from REGION:
+# gemini-3.6-flash is offered on the global endpoint rather than through EU
+# multi-region endpoints, and "global" is not a valid Cloud Run region -- one
+# variable cannot be both.
+#
+# Note the trade-off this encodes: the service and the recordings stay in
+# REGION, but inference on the global endpoint may happen outside it. If
+# in-region processing matters more than having the newest model, set
+# VERTEX_LOCATION to REGION and point MODEL_* at a model served there.
+VERTEX_LOCATION="${VERTEX_LOCATION:-global}"
+
 SERVICE="minutes"
 
 if [[ -z "$PROJECT" ]]; then
@@ -20,7 +34,9 @@ if [[ -z "$PROJECT" ]]; then
   exit 1
 fi
 
-echo "==> Project $PROJECT / region $REGION"
+echo "==> Project $PROJECT"
+echo "==> Cloud Run + storage: $REGION"
+echo "==> Vertex AI:            $VERTEX_LOCATION"
 
 echo "==> Enabling APIs"
 gcloud services enable \
@@ -45,7 +61,7 @@ gcloud projects add-iam-policy-binding "$PROJECT" \
   --condition None \
   --quiet >/dev/null
 
-ENV_VARS="GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${REGION}"
+ENV_VARS="GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=${VERTEX_LOCATION}"
 
 if [[ -n "${GCS_BUCKET:-}" ]]; then
   echo "==> Granting bucket access (gs://${GCS_BUCKET})"
@@ -152,6 +168,11 @@ cat <<EOF
 Open that on your phone and add it to the home screen.
   iPhone:  Share -> Add to Home Screen
   Android: menu -> Install app / Add to Home screen
+
+Vertex is serving from "$VERTEX_LOCATION"; the service and recordings are in
+"$REGION". If you need inference to stay in region, set
+VERTEX_LOCATION=$REGION and pick a model served there -- gemini-3.6-flash
+is currently global-only.
 
 Note --allow-unauthenticated: this URL is public. It is unguessable, but
 anyone with the link can record a meeting into your project. Put IAP in
