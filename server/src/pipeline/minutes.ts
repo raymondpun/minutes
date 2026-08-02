@@ -46,9 +46,13 @@ function backfill(
       flags.add(
         `${s.speakerId} was never identified (${s.segmentCount} contributions). Add their name before sign-off.`,
       );
-    } else if (s.confidence === 'low') {
+    } else if (s.confidence !== 'high') {
+      // Medium means the model matched the name from a single mention rather
+      // than hearing the person introduce themselves. That is good enough to
+      // draft without stopping the user, but not good enough to attach to a
+      // resolution unchallenged.
       flags.add(
-        `Speaker name "${s.name}" was inferred with low confidence${
+        `Speaker name "${s.name}" was inferred with ${s.confidence} confidence${
           s.evidence ? ` from: "${s.evidence}"` : ''
         }. Verify before sign-off.`,
       );

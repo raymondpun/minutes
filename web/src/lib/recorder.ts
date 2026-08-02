@@ -32,20 +32,28 @@ class CaptureProcessor extends AudioWorkletProcessor {
     // Post roughly every 4096 samples rather than every 128-sample render
     // quantum, or we spend the meeting doing postMessage.
     this.threshold = 4096;
+    // Up to 4095 samples sit here below the threshold. On stop that is a
+    // quarter of a second of audio -- the last word of the meeting, and again
+    // at every pause -- so the main thread can ask for it before tearing down.
+    this.port.onmessage = (e) => {
+      if (e.data === 'flush') this.flush();
+    };
+  }
+  flush() {
+    if (!this.count) return;
+    const merged = new Float32Array(this.count);
+    let offset = 0;
+    for (const b of this.buffer) { merged.set(b, offset); offset += b.length; }
+    this.port.postMessage(merged, [merged.buffer]);
+    this.buffer = [];
+    this.count = 0;
   }
   process(inputs) {
     const channel = inputs[0] && inputs[0][0];
     if (channel && channel.length) {
       this.buffer.push(new Float32Array(channel));
       this.count += channel.length;
-      if (this.count >= this.threshold) {
-        const merged = new Float32Array(this.count);
-        let offset = 0;
-        for (const b of this.buffer) { merged.set(b, offset); offset += b.length; }
-        this.port.postMessage(merged, [merged.buffer]);
-        this.buffer = [];
-        this.count = 0;
-      }
+      if (this.count >= this.threshold) this.flush();
     }
     return true;
   }
@@ -97,41 +105,60 @@ export async function startRecorder(
   const track = stream.getAudioTracks()[0];
   const deviceLabel = track?.label || 'Default microphone';
 
+  // Everything from here can throw -- the AudioContext constructor, resume()
+  // rejecting on iOS, addModule() being blocked by a CSP. Without this the
+  // microphone stays live with no recorder attached to it: the phone's
+  // recording indicator on, nothing being captured, and the retry failing with
+  // "the microphone is in use by another app" pointing at an app that is us.
+  let context: AudioContext | undefined;
+  try {
+    return await setUp();
+  } catch (err) {
+    for (const t of stream.getTracks()) t.stop();
+    await context?.close().catch(() => {});
+    throw err;
+  }
+
+  async function setUp(): Promise<RecorderHandle> {
+
   // Ask for 16 kHz directly -- most browsers honour it and skip the resample.
   const AudioCtor: typeof AudioContext =
-    window.AudioContext ?? (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    window.AudioContext ??
+    (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
 
-  let context: AudioContext;
   try {
     context = new AudioCtor({ sampleRate: TARGET_SAMPLE_RATE });
   } catch {
     context = new AudioCtor();
   }
+  const ctx = context;
 
   // iOS starts contexts suspended until a user gesture has been handled.
-  if (context.state === 'suspended') await context.resume();
+  if (ctx.state === 'suspended') await ctx.resume();
 
   const workletUrl = URL.createObjectURL(
     new Blob([WORKLET_SOURCE], { type: 'application/javascript' }),
   );
 
   try {
-    await context.audioWorklet.addModule(workletUrl);
+    await ctx.audioWorklet.addModule(workletUrl);
   } finally {
     URL.revokeObjectURL(workletUrl);
   }
 
-  const source = context.createMediaStreamSource(stream);
-  const node = new AudioWorkletNode(context, 'capture-processor', {
+  const source = ctx.createMediaStreamSource(stream);
+  const node = new AudioWorkletNode(ctx, 'capture-processor', {
     numberOfInputs: 1,
     numberOfOutputs: 0,
     channelCount: 1,
   });
 
-  const inputRate = context.sampleRate;
+  const inputRate = ctx.sampleRate;
   const needsResample = Math.abs(inputRate - TARGET_SAMPLE_RATE) > 1;
 
   let carry = new Float32Array(0);
+  /** Input samples left over between blocks, so the resampler keeps its phase. */
+  let inputCarry = new Float32Array(0);
   let levelCounter = 0;
 
   node.port.onmessage = (event: MessageEvent<Float32Array>) => {
@@ -143,9 +170,21 @@ export async function startRecorder(
         callbacks.onLevel(rms(incoming));
       }
 
-      const samples = needsResample
-        ? resample(incoming, inputRate, TARGET_SAMPLE_RATE)
-        : incoming;
+      let samples: Float32Array;
+      if (needsResample) {
+        // Resample across the block boundary, not within it. Restarting at
+        // phase zero every block silently discarded the remainder each time --
+        // at 48 kHz that is 2 samples per 4096, a 0.024% timebase error that
+        // deletes over a second from a 90 minute meeting and shifts every
+        // timestamp with it, plus a sampling discontinuity ~12 times a second
+        // that is audible as roughness on every voice in the room.
+        const merged = concat(inputCarry, incoming);
+        const { out, consumed } = downsample(merged, inputRate / TARGET_SAMPLE_RATE);
+        inputCarry = merged.slice(consumed);
+        samples = out;
+      } else {
+        samples = incoming;
+      }
 
       const merged = new Float32Array(carry.length + samples.length);
       merged.set(carry, 0);
@@ -179,6 +218,15 @@ export async function startRecorder(
     if (stopped) return;
     stopped = true;
 
+    // Ask the worklet for whatever it is still holding below its post
+    // threshold, and give it a moment to arrive, before tearing anything down.
+    try {
+      node.port.postMessage('flush');
+      await new Promise((r) => setTimeout(r, 60));
+    } catch {
+      /* already gone */
+    }
+
     // Flush the tail so the last partial second is not thrown away.
     if (carry.length > 0) {
       callbacks.onAudio(floatToInt16(carry));
@@ -193,30 +241,51 @@ export async function startRecorder(
       /* already torn down */
     }
     for (const t of stream.getTracks()) t.stop();
-    await context.close().catch(() => {});
+    await ctx.close().catch(() => {});
   };
 
   return { stop, sampleRate: inputRate, deviceLabel };
+  }
 }
 
 /**
- * Linear interpolation downsample. Good enough at these ratios for speech, and
- * it avoids shipping a resampling library to a phone. Only runs when the
- * browser refused a 16 kHz context.
+ * Downsample by averaging each output sample's window of input.
+ *
+ * Averaging rather than picking: at 48 kHz the ratio is exactly 3, so linear
+ * interpolation degenerated into taking every third sample with no filtering
+ * at all, folding 8-24 kHz -- sibilance, fans, aircon hiss -- straight down
+ * into the speech band. A box average over the window is a crude lowpass, but
+ * it is a lowpass, and it costs nothing.
+ *
+ * Returns how much input it consumed so the caller can carry the remainder and
+ * keep the phase continuous across blocks.
  */
-function resample(input: Float32Array, from: number, to: number): Float32Array {
-  const ratio = from / to;
+function downsample(
+  input: Float32Array,
+  ratio: number,
+): { out: Float32Array; consumed: number } {
   const length = Math.floor(input.length / ratio);
-  const output = new Float32Array(length);
+  const out = new Float32Array(length);
   for (let i = 0; i < length; i++) {
-    const position = i * ratio;
-    const index = Math.floor(position);
-    const frac = position - index;
-    const a = input[index] ?? 0;
-    const b = input[index + 1] ?? a;
-    output[i] = a + (b - a) * frac;
+    const start = i * ratio;
+    const end = start + ratio;
+    let sum = 0;
+    let n = 0;
+    for (let j = Math.floor(start); j < Math.min(Math.ceil(end), input.length); j++) {
+      sum += input[j] ?? 0;
+      n++;
+    }
+    out[i] = n > 0 ? sum / n : 0;
   }
-  return output;
+  return { out, consumed: Math.floor(length * ratio) };
+}
+
+function concat(a: Float32Array, b: Float32Array): Float32Array {
+  if (a.length === 0) return b;
+  const merged = new Float32Array(a.length + b.length);
+  merged.set(a, 0);
+  merged.set(b, a.length);
+  return merged;
 }
 
 function floatToInt16(input: Float32Array): ArrayBuffer {

@@ -169,6 +169,11 @@ export default function App() {
   const teardown = async () => {
     await recorderRef.current?.stop().catch(() => {});
     recorderRef.current = null;
+    // Closing the uplink matters as much as stopping the mic. Left open it
+    // reconnects forever, and a retry would leave the orphan still owning React
+    // state -- dragging the timer backwards and fighting over the status pill.
+    uplinkRef.current?.close();
+    uplinkRef.current = null;
     await wakeLockRef.current?.release().catch(() => {});
     wakeLockRef.current = null;
   };
@@ -199,13 +204,21 @@ export default function App() {
       await recorderRef.current?.stop().catch(() => {});
       recorderRef.current = null;
       await uplinkRef.current?.drain(5_000);
+      setLevel(0);
+
+      // The microphone is already released, so the screen must say paused
+      // whether or not the server agrees. Showing "recording" over a dead
+      // microphone is the one state the chair must never be left in.
+      setPhase('paused');
+      recordedBeforePauseRef.current = elapsed;
+
       const updated = await api.pauseMeeting(meta.id);
       recordedBeforePauseRef.current = updated.durationSeconds ?? elapsed;
       setElapsed(recordedBeforePauseRef.current);
-      setLevel(0);
-      setPhase('paused');
     } catch (err) {
-      setError(message(err));
+      setError(
+        `${message(err)} — the microphone is off and recording has stopped, but the server was not told.`,
+      );
     } finally {
       setBusy(false);
     }
@@ -219,6 +232,12 @@ export default function App() {
       const uplink = uplinkRef.current;
       if (!uplink) throw new Error('Connection was lost. End the meeting and try again.');
 
+      // A previous resume may have half-succeeded. Starting a second capture
+      // graph over the first interleaves two PCM streams into one socket and
+      // corrupts the recording, so clear any existing one first.
+      await recorderRef.current?.stop().catch(() => {});
+      recorderRef.current = null;
+
       const recorder = await startRecorder(
         {
           onAudio: (pcm) => {
@@ -231,9 +250,20 @@ export default function App() {
         deviceIdRef.current,
       );
       recorderRef.current = recorder;
-      setDeviceLabel(recorder.deviceLabel);
 
-      await api.resumeMeeting(meta.id);
+      try {
+        await api.resumeMeeting(meta.id);
+      } catch (err) {
+        // The microphone is live but the server does not know the meeting
+        // resumed. Rather than leave it capturing behind a screen that says
+        // "the microphone is off", release it and stay honestly paused.
+        await recorder.stop().catch(() => {});
+        recorderRef.current = null;
+        setLevel(0);
+        throw err;
+      }
+
+      setDeviceLabel(recorder.deviceLabel);
       // The clock continues from where the recording left off, not from zero:
       // paused time does not exist in the audio.
       startedAtRef.current = Date.now();
@@ -283,6 +313,13 @@ export default function App() {
 
   // Poll while the server is working. Transcribing an hour of audio takes a
   // few minutes, and the phone cannot hold a request open that long.
+  //
+  // The status has to be a dependency. Polling stops at awaiting_speakers by
+  // design, and confirming the names moves the server to drafting -- but none
+  // of view, id or loadSnapshot change when that happens, so without this the
+  // effect never re-runs, the loop stays dead, and the meeting sits on a
+  // spinner forever while its minutes finish on the server. That is the happy
+  // path of every meeting.
   useEffect(() => {
     if (view !== 'review' || !meta) return;
 
@@ -303,7 +340,7 @@ export default function App() {
     return () => {
       cancelled = true;
     };
-  }, [view, meta?.id, loadSnapshot]);
+  }, [view, meta?.id, snapshot?.meta.status, loadSnapshot]);
 
   const confirmSpeakers = async (speakers: SpeakerIdentification[]) => {
     if (!meta) return;

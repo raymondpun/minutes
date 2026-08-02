@@ -65,17 +65,53 @@ export async function readMeta(id: string): Promise<MeetingMeta> {
   return JSON.parse(raw) as MeetingMeta;
 }
 
-export async function writeMeta(meta: MeetingMeta): Promise<void> {
-  await fsp.writeFile(paths.meta(meta.id), JSON.stringify(meta, null, 2));
+/**
+ * Write via a temporary file and rename.
+ *
+ * writeFile truncates and then writes, and on a single event loop a concurrent
+ * reader lands in that window routinely -- the client polls every three seconds
+ * while the pipeline writes progress several times a minute. A torn read gives
+ * readMeta a SyntaxError (a 500 on a healthy meeting) or makes listMeetings
+ * drop the meeting from the history entirely. rename is atomic within a
+ * filesystem, so a reader sees either the old file or the new one.
+ */
+async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`;
+  await fsp.writeFile(tmp, JSON.stringify(value, null, 2));
+  await fsp.rename(tmp, file);
 }
 
-export async function patchMeta(
-  id: string,
-  patch: Partial<MeetingMeta>,
-): Promise<MeetingMeta> {
-  const meta = { ...(await readMeta(id)), ...patch };
-  await writeMeta(meta);
-  return meta;
+export async function writeMeta(meta: MeetingMeta): Promise<void> {
+  await writeJsonAtomic(paths.meta(meta.id), meta);
+}
+
+/**
+ * Serialise read-modify-write per meeting.
+ *
+ * patchMeta is called concurrently from HTTP handlers, the websocket's
+ * roll-call check, and a fire-and-forget progress writer. Interleaved, the
+ * later write is built from a stale read and silently discards the earlier
+ * one -- which is how a pause mark disappears and the timeline splices two
+ * conversations together with no marker.
+ */
+const metaQueues = new Map<string, Promise<unknown>>();
+
+function withMetaLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+  const previous = metaQueues.get(id) ?? Promise.resolve();
+  const next = previous.then(fn, fn);
+  metaQueues.set(
+    id,
+    next.catch(() => {}),
+  );
+  return next;
+}
+
+export function patchMeta(id: string, patch: Partial<MeetingMeta>): Promise<MeetingMeta> {
+  return withMetaLock(id, async () => {
+    const meta = { ...(await readMeta(id)), ...patch };
+    await writeMeta(meta);
+    return meta;
+  });
 }
 
 export async function setStatus(
@@ -118,26 +154,71 @@ export async function listMeetings(): Promise<MeetingMeta[]> {
 const appendStreams = new Map<string, fs.WriteStream>();
 
 /**
- * Append a chunk of raw PCM. We hold the write stream open for the length of the
- * meeting so a 90 minute recording is one sequential write, not 270 opens.
+ * Meetings whose recording is finished. Without this, a frame still in flight
+ * when the meeting stops silently reopens the stream -- recreating audio.pcm
+ * after the app has told the user the recording was deleted, and leaking a
+ * file handle nothing will ever close.
+ */
+const closedRecordings = new Set<string>();
+
+export class RecordingClosed extends Error {
+  constructor(id: string) {
+    super(`Recording for ${id} has already finished`);
+  }
+}
+
+/**
+ * Append a chunk of raw PCM. The write stream is held open for the length of
+ * the meeting, so a 90 minute recording is one sequential write, not 5400
+ * opens.
  */
 export function appendPcm(id: string, chunk: Buffer): Promise<void> {
+  if (closedRecordings.has(id)) return Promise.reject(new RecordingClosed(id));
+
   let stream = appendStreams.get(id);
   if (!stream) {
     fs.mkdirSync(dir(id), { recursive: true });
     stream = fs.createWriteStream(paths.pcm(id), { flags: 'a' });
+
+    // Without this listener an fs error -- ENOSPC is entirely plausible at
+    // 115 MB an hour on a container disk -- is emitted as an unhandled 'error'
+    // event, which Node throws as an uncaught exception. That kills the process
+    // in the middle of the meeting and takes every unflushed byte with it.
+    stream.on('error', (err) => {
+      console.error(`[audio] write stream failed for ${id}:`, err);
+      appendStreams.delete(id);
+    });
+
     appendStreams.set(id, stream);
   }
+
+  const active = stream;
   return new Promise((resolve, reject) => {
-    stream!.write(chunk, (err) => (err ? reject(err) : resolve()));
+    if (active.destroyed || active.writableEnded) {
+      appendStreams.delete(id);
+      return reject(new Error('Audio write stream is no longer usable'));
+    }
+    active.write(chunk, (err) => (err ? reject(err) : resolve()));
   });
 }
 
 export async function closePcm(id: string): Promise<void> {
+  closedRecordings.add(id);
   const stream = appendStreams.get(id);
   if (!stream) return;
   appendStreams.delete(id);
-  await new Promise<void>((resolve) => stream.end(resolve));
+  if (stream.destroyed || stream.writableEnded) return;
+  // end() will not call back on a destroyed stream, and a hung /stop would
+  // strand the meeting mid-pipeline, so race it against a timeout.
+  await Promise.race([
+    new Promise<void>((resolve) => stream.end(resolve)),
+    new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+  ]);
+}
+
+/** A new recording on the same id is a new recording. */
+export function reopenRecording(id: string): void {
+  closedRecordings.delete(id);
 }
 
 export async function pcmSize(id: string): Promise<number> {
@@ -217,7 +298,7 @@ export async function writeTranscript(
   id: string,
   segments: TranscriptSegment[],
 ): Promise<void> {
-  await fsp.writeFile(paths.transcript(id), JSON.stringify(segments, null, 2));
+  await writeJsonAtomic(paths.transcript(id), segments);
 }
 
 export async function readTranscript(id: string): Promise<TranscriptSegment[]> {
@@ -232,7 +313,7 @@ export async function writeSpeakers(
   id: string,
   speakers: SpeakerIdentification[],
 ): Promise<void> {
-  await fsp.writeFile(paths.speakers(id), JSON.stringify(speakers, null, 2));
+  await writeJsonAtomic(paths.speakers(id), speakers);
 }
 
 export async function readSpeakers(id: string): Promise<SpeakerIdentification[]> {
@@ -248,8 +329,12 @@ export async function writeMinutes(
   minutes: Minutes,
   markdown: string,
 ): Promise<void> {
-  await fsp.writeFile(paths.minutesJson(id), JSON.stringify(minutes, null, 2));
-  await fsp.writeFile(paths.minutesMd(id), markdown);
+  // Two files that must agree: the .docx renders from the JSON and the .md
+  // download is the file, so a half-applied pair ships two different documents.
+  await writeJsonAtomic(paths.minutesJson(id), minutes);
+  const tmp = `${paths.minutesMd(id)}.${process.pid}.tmp`;
+  await fsp.writeFile(tmp, markdown);
+  await fsp.rename(tmp, paths.minutesMd(id));
 }
 
 export async function readMinutes(

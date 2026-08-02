@@ -31,7 +31,39 @@ export async function buildTranscript(
   onProgress: (message: string) => void,
 ): Promise<TranscriptSegment[]> {
   const totalBytes = await store.pcmSize(meetingId);
-  if (totalBytes === 0) throw new Error('No audio was recorded for this meeting.');
+
+  if (totalBytes === 0) {
+    // The local disk is empty, but on Cloud Run that is the normal state after
+    // an instance is reclaimed -- and if the recording was already uploaded,
+    // it is sitting complete in the bucket. Telling the user nothing was
+    // recorded while their audio is safe in Cloud Storage is the worst
+    // possible answer, so look there before giving up.
+    if (await gcsAudioAvailable(meetingId)) {
+      onProgress('Transcribing the archived recording');
+      const result = await generateJson<RawSegments>({
+        model: config.models.transcribe,
+        label: 'transcribe-archived',
+        parts: [
+          audioPart({
+            gcsUri: `gs://${config.gcsBucket}/meetings/${meetingId}/audio.wav`,
+            mimeType: 'audio/wav',
+          }),
+          {
+            text: diarizedTranscriptPrompt({
+              offsetSeconds: 0,
+              knownSpeakers: [],
+              expectedAttendees,
+              isFirstSegment: true,
+            }),
+          },
+        ],
+        responseSchema: TRANSCRIPT_SCHEMA,
+        maxOutputTokens: 65_536,
+      });
+      return normalise(result.segments ?? [], 0);
+    }
+    throw new Error('No audio was recorded for this meeting.');
+  }
 
   const totalSeconds = pcmDurationSeconds(totalBytes);
   const wholeWavBytes = totalBytes + 44;
@@ -88,10 +120,18 @@ export async function buildTranscript(
   // Segmented fallback.
   const { segmentSeconds, segmentOverlapSeconds } = config;
   const stride = segmentSeconds - segmentOverlapSeconds;
-  const segmentCount = Math.max(1, Math.ceil(totalSeconds / stride));
+  // Counted by stride, the last segment is often a one-second runt whose output
+  // is then filtered away entirely -- a wasted model call and a misleading
+  // "part 11 of 11". Each segment is stride + overlap long, so count from that.
+  const segmentCount =
+    totalSeconds <= segmentSeconds
+      ? 1
+      : Math.ceil((totalSeconds - segmentSeconds) / stride) + 1;
 
   const all: TranscriptSegment[] = [];
   const knownSpeakers = new Set<string>();
+  /** Where one segment's audio ends and the next begins. */
+  const seams: number[] = [];
 
   for (let i = 0; i < segmentCount; i++) {
     const startSec = i * stride;
@@ -134,10 +174,18 @@ export async function buildTranscript(
     const shifted = normalise(result.segments ?? [], startSec, endSec - startSec);
     for (const s of shifted) knownSpeakers.add(s.speaker);
 
-    // Drop anything landing inside the overlap we already transcribed, so the
-    // seam does not produce a duplicated sentence.
-    const cutoff = i === 0 ? -Infinity : startSec + segmentOverlapSeconds / 2;
-    all.push(...shifted.filter((s) => s.start >= cutoff));
+    // Each segment owns a half-open slice of the timeline, splitting every
+    // overlap down the middle. The previous filter was a lower bound only, so
+    // the trailing half of each overlap was claimed by both neighbours -- about
+    // five seconds of speech transcribed and emitted twice at every seam, which
+    // dedupe only catches when the two renderings come out character-identical.
+    const from = i === 0 ? -Infinity : startSec + segmentOverlapSeconds / 2;
+    const until =
+      i === segmentCount - 1
+        ? Number.POSITIVE_INFINITY
+        : (i + 1) * stride + segmentOverlapSeconds / 2;
+    if (i > 0) seams.push(startSec);
+    all.push(...shifted.filter((s) => s.start >= from && s.start < until));
   }
 
   // Sorted per segment, but never across them until now. Segment boundaries do
@@ -145,7 +193,7 @@ export async function buildTranscript(
   // transcript is read top to bottom by both the model drafting the minutes and
   // the human checking them.
   all.sort((a, b) => a.start - b.start);
-  return dedupe(all);
+  return dedupe(all, seams);
 }
 
 /**
@@ -182,17 +230,40 @@ function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Overlapping segments occasionally yield the same sentence twice with slightly
- * different timings. Match on text rather than time.
+ * Remove the double-transcription of the overlap between two segments.
+ *
+ * Matched on text rather than time, because the two segments estimate timings
+ * independently and give the same sentence slightly different ones.
+ *
+ * Restricted to the neighbourhood of a seam. Run across the whole transcript it
+ * deletes real speech: in a two hour meeting somebody says 「係」 at 10:00 and
+ * somebody else says 「係」 at 10:04, and one of them silently disappears
+ * nowhere near a segment boundary. Short confirmations are exactly the words
+ * people repeat, so a global text match is guaranteed to eat some of them.
  */
-function dedupe(segments: TranscriptSegment[]): TranscriptSegment[] {
+function dedupe(segments: TranscriptSegment[], seams: number[]): TranscriptSegment[] {
+  if (seams.length === 0) return segments;
+
+  const WINDOW = config.segmentOverlapSeconds * 2;
+  const nearSeam = (t: number) => seams.some((seam) => Math.abs(t - seam) <= WINDOW);
+
+  // Short utterances are never worth de-duplicating. Three people answering a
+  // roll call two seconds apart all normalise to "present", and a vote is a row
+  // of identical "aye"s -- collapsing those silently falsifies an attendance or
+  // voting record, which is the one thing these minutes exist to get right.
+  // A duplicated 「係」 costs nothing; a deleted vote costs everything.
+  const MIN_DEDUPE_LENGTH = 12;
+
   const out: TranscriptSegment[] = [];
   for (const s of segments) {
-    const duplicate = out.some(
-      (prev) =>
-        Math.abs(prev.start - s.start) < 6 &&
-        normaliseText(prev.text) === normaliseText(s.text),
-    );
+    const duplicate =
+      nearSeam(s.start) &&
+      normaliseText(s.text).length >= MIN_DEDUPE_LENGTH &&
+      out.some(
+        (prev) =>
+          Math.abs(prev.start - s.start) < 6 &&
+          normaliseText(prev.text) === normaliseText(s.text),
+      );
     if (!duplicate) out.push(s);
   }
   return out;
@@ -200,6 +271,16 @@ function dedupe(segments: TranscriptSegment[]): TranscriptSegment[] {
 
 function normaliseText(t: string): string {
   return t.replace(/[\s\p{P}]/gu, '').toLowerCase();
+}
+
+async function gcsAudioAvailable(meetingId: string): Promise<boolean> {
+  if (!config.gcsBucket) return false;
+  try {
+    const { audioExists } = await import('../gcs.js');
+    return await audioExists(meetingId);
+  } catch {
+    return false;
+  }
 }
 
 export function formatDuration(seconds: number): string {

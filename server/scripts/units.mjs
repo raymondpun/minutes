@@ -105,6 +105,62 @@ console.log('\n3b. Live chunk ramp');
   );
 }
 
+console.log('\n3c. Downsampler keeps its phase');
+{
+  // Mirrors web/src/lib/recorder.ts. The bug: resampling each block from phase
+  // zero discarded the remainder every time -- 2 samples per 4096 at 48 kHz,
+  // a 0.024% timebase error that deletes over a second from a 90 minute
+  // meeting and shifts every timestamp with it.
+  function downsample(input, ratio) {
+    const length = Math.floor(input.length / ratio);
+    const out = new Float32Array(length);
+    for (let i = 0; i < length; i++) {
+      const start = i * ratio;
+      let sum = 0, n = 0;
+      for (let j = Math.floor(start); j < Math.min(Math.ceil(start + ratio), input.length); j++) {
+        sum += input[j] ?? 0; n++;
+      }
+      out[i] = n > 0 ? sum / n : 0;
+    }
+    return { out, consumed: Math.floor(length * ratio) };
+  }
+
+  const RATIO = 3; // 48 kHz -> 16 kHz, the iOS case
+  const BLOCK = 4096;
+  const BLOCKS = 200;
+
+  let carry = new Float32Array(0);
+  let produced = 0;
+  for (let b = 0; b < BLOCKS; b++) {
+    const merged = new Float32Array(carry.length + BLOCK);
+    merged.set(carry, 0);
+    merged.set(new Float32Array(BLOCK), carry.length);
+    const { out, consumed } = downsample(merged, RATIO);
+    carry = merged.slice(consumed);
+    produced += out.length;
+  }
+
+  const fed = BLOCKS * BLOCK;
+  const ideal = fed / RATIO;
+  const driftPpm = Math.abs(produced - ideal) / ideal * 1e6;
+
+  check(
+    'no samples lost across block boundaries',
+    driftPpm < 100,
+    `${produced} of ${ideal} expected (${driftPpm.toFixed(0)} ppm drift)`,
+  );
+  check('leftover input is carried, never dropped', carry.length < RATIO, `${carry.length} samples held`);
+
+  // What the old per-block implementation did, for contrast.
+  const oldProduced = BLOCKS * Math.floor(BLOCK / RATIO);
+  const oldDrift = Math.abs(oldProduced - ideal) / ideal;
+  check(
+    'the previous approach really did drift',
+    oldDrift > 1e-4,
+    `${(oldDrift * 100).toFixed(3)}% = ${(oldDrift * 5400).toFixed(2)}s lost over 90 min`,
+  );
+}
+
 console.log('\n4. Formal minutes rendering');
 let minutesFixture;
 {

@@ -41,11 +41,13 @@ const wrap =
     fn(req, res).catch((err: unknown) => {
       const message = err instanceof Error ? err.message : String(err);
       const status =
-        err instanceof store.BadMeetingId
-          ? 400
-          : (err as NodeJS.ErrnoException)?.code === 'ENOENT'
-            ? 404
-            : 500;
+        err instanceof WrongStatus
+          ? 409
+          : err instanceof store.BadMeetingId
+            ? 400
+            : (err as NodeJS.ErrnoException)?.code === 'ENOENT'
+              ? 404
+              : 500;
       if (status === 500) console.error(`[api] ${req.method} ${req.path} failed:`, err);
       if (!res.headersSent) {
         res.status(status).json({
@@ -54,6 +56,30 @@ const wrap =
       }
     });
   };
+
+/**
+ * Reject a lifecycle action that does not make sense for the meeting's current
+ * state. Without this, an ordinary retry from a stale tab can push a finished
+ * meeting back into the pipeline -- and since the audio is gone by then,
+ * transcription throws "No audio was recorded" and a meeting with perfectly
+ * good minutes ends up displaying as failed.
+ */
+class WrongStatus extends Error {
+  readonly status = 409;
+  constructor(action: string, actual: MeetingMeta['status'], allowed: readonly string[]) {
+    super(
+      `Cannot ${action} a meeting that is "${actual}" — only ${allowed.join(' or ')}.`,
+    );
+  }
+}
+
+function requireStatus(
+  meta: MeetingMeta,
+  action: string,
+  allowed: readonly MeetingMeta['status'][],
+): void {
+  if (!allowed.includes(meta.status)) throw new WrongStatus(action, meta.status, allowed);
+}
 
 /* ------------------------------------------------------------------ api --- */
 
@@ -146,6 +172,8 @@ app.get(
 app.post(
   '/api/meetings/:id/start',
   wrap(async (req, res) => {
+    requireStatus(await store.readMeta(req.params.id!), 'start', ['setup']);
+    store.reopenRecording(req.params.id!);
     const meta = await store.patchMeta(req.params.id!, {
       status: 'roll_call',
       startedAt: localTime(),
@@ -161,6 +189,7 @@ app.post(
   '/api/meetings/:id/roll-call-done',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    requireStatus(await store.readMeta(id), 'end the roll call of', ['roll_call']);
     const meta = await store.patchMeta(id, {
       status: 'recording',
       rollCallEndedAt: await store.recordedSeconds(id),
@@ -179,6 +208,7 @@ app.post(
   wrap(async (req, res) => {
     const id = req.params.id!;
     const meta = await store.readMeta(id);
+    requireStatus(meta, 'pause', ['recording', 'roll_call']);
     const at = await store.recordedSeconds(id);
     const updated = await store.patchMeta(id, {
       status: 'paused',
@@ -191,6 +221,7 @@ app.post(
 app.post(
   '/api/meetings/:id/resume',
   wrap(async (req, res) => {
+    requireStatus(await store.readMeta(req.params.id!), 'resume', ['paused']);
     const meta = await store.patchMeta(req.params.id!, { status: 'recording' });
     res.json(meta);
   }),
@@ -209,6 +240,9 @@ app.post(
     if (meta.status === 'transcribing' || meta.status === 'identifying') {
       return res.json(meta);
     }
+    // Stopping a meeting that is already past recording would re-transcribe it
+    // and overwrite the human-corrected speaker names with fresh model output.
+    requireStatus(meta, 'stop', ['roll_call', 'recording', 'paused']);
     await store.closePcm(id);
     const updated = await store.patchMeta(id, {
       status: 'transcribing',
@@ -216,7 +250,12 @@ app.post(
       durationSeconds: await store.recordedSeconds(id),
       progress: 'Preparing recording',
     });
-    void runTranscription(id);
+    // Archive the meeting record before the long transcription starts. Until
+    // now nothing reached Cloud Storage until transcription finished, so an
+    // instance reclaimed mid-pipeline left the meeting with no meta.json in the
+    // bucket -- absent from restoreIndex, never resumed, silently gone.
+    await archive(id);
+    startJob(id, runTranscription);
     res.json(updated);
   }),
 );
@@ -248,9 +287,20 @@ app.put(
       };
     });
 
+    // Never let a cold instance's empty roster overwrite a real one. This
+    // endpoint drives its merge from what is on disk, and readSpeakers returns
+    // [] for "not on this instance" just as readily as for "none" -- which
+    // would destroy the names the user just typed, locally and in the bucket.
+    if (merged.length === 0 && incoming.length > 0) {
+      return res
+        .status(409)
+        .json({ error: 'The speaker list is not loaded on this server yet. Reopen the meeting and try again.' });
+    }
+
     await store.writeSpeakers(id, merged);
+    await archive(id);
     await store.patchMeta(id, { status: 'drafting', progress: 'Drafting minutes' });
-    void runDrafting(id);
+    startJob(id, runDrafting);
     res.json({ speakers: merged });
   }),
 );
@@ -259,8 +309,12 @@ app.post(
   '/api/meetings/:id/minutes/regenerate',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    requireStatus(await store.readMeta(id), 'redraft', ['complete', 'failed', 'awaiting_speakers']);
+    if (gcs.enabled()) {
+      await gcs.restoreMeeting(id, store.meetingDir(id)).catch(() => {});
+    }
     await store.patchMeta(id, { status: 'drafting', progress: 'Redrafting minutes' });
-    void runDrafting(id);
+    startJob(id, runDrafting);
     res.json({ ok: true });
   }),
 );
@@ -395,6 +449,23 @@ app.delete(
 const running = new Set<string>();
 
 /**
+ * Start a pipeline stage unless one is already running for this meeting.
+ *
+ * The Set was only ever consulted by the stall-resumer, so a retried request or
+ * a double tap started a second concurrent pipeline: two drafts interleaving
+ * their writes, and whichever finished first clearing the flag and overwriting
+ * the other's status -- a meeting with good minutes ending up marked failed.
+ */
+function startJob(id: string, job: (id: string) => Promise<void>): boolean {
+  if (running.has(id)) {
+    console.warn(`[pipeline] ${id} already has a stage running; ignoring duplicate start`);
+    return false;
+  }
+  void job(id);
+  return true;
+}
+
+/**
  * Copy the meeting's documents to Cloud Storage if one is configured. Never
  * fatal: a meeting that exists locally but failed to archive is still a
  * meeting, and the user should not lose a draft to a bucket permission error.
@@ -403,15 +474,17 @@ const running = new Set<string>();
  * Make sure the recording is in Cloud Storage before the local copy is dropped.
  * Single-pass transcription already uploaded it; the segmented path did not.
  */
-async function ensureAudioArchived(id: string): Promise<void> {
+async function ensureAudioArchived(id: string): Promise<boolean> {
   try {
-    if (await gcs.audioExists(id)) return;
+    if (await gcs.audioExists(id)) return true;
     const size = await store.pcmSize(id);
-    if (size === 0) return;
+    if (size === 0) return false;
     const pcm = await store.readPcmRange(id, 0, size);
     await gcs.uploadAudio(id, pcmToWav(pcm));
+    return true;
   } catch (err) {
     console.warn(`[archive] could not retain audio for ${id}:`, err);
+    return false;
   }
 }
 
@@ -464,7 +537,9 @@ async function runTranscription(id: string): Promise<void> {
      * between the chair and their minutes.
      *
      * Anything uncertain still reaches the reader: it is raised in the minutes'
-     * own "to verify before sign-off" list either way.
+     * own "to verify before sign-off" list either way -- including the medium
+     * confidence names this lets through, which the prompt defines as a single
+     * piece of evidence rather than a heard introduction.
      */
     const uncertain = speakers.filter((sp) => !sp.name || sp.confidence === 'low');
 
@@ -503,19 +578,27 @@ async function runDrafting(id: string): Promise<void> {
     const minutes = await draftMinutes(meta, named, speakers);
     await store.writeMinutes(id, minutes, renderMarkdown(minutes));
 
-    // What happens to the recording now is a deliberate choice, not a default.
-    // With retention off it goes immediately and the app can honestly say the
-    // recording does not survive. With retention on it is kept in Cloud Storage
-    // so a disputed minute can be settled by listening -- and a bucket
-    // lifecycle rule deletes it on schedule rather than never.
-    if (config.retainAudioDays !== 0 && gcs.enabled()) {
-      await ensureAudioArchived(id);
-    } else {
+    // What happens to the recording is a promise made to the room, so the code
+    // has to keep it exactly.
+    //
+    // The local copy is only dropped once the audio is provably somewhere else.
+    // Deleting it because a bucket *should* have taken it -- or because no
+    // bucket was configured at all -- destroys the recording while the consent
+    // announcement, which reads the same retainAudioDays, has just told
+    // everyone present it would be kept.
+    if (config.retainAudioDays === 0) {
       await gcs.deleteAudio(id).catch(() => {});
+      await store.deleteAudio(id);
+    } else if (gcs.enabled() && (await ensureAudioArchived(id))) {
+      await store.deleteAudio(id);
+    } else {
+      console.warn(
+        `[retention] keeping the local recording for ${id}: ` +
+          (gcs.enabled()
+            ? 'it could not be archived to Cloud Storage'
+            : 'no GCS_BUCKET is configured, so this is the only copy'),
+      );
     }
-    // The instance's local copy always goes: the disk is ephemeral anyway, and
-    // Cloud Storage is now the only durable home.
-    await store.deleteAudio(id);
 
     await store.setStatus(id, 'complete');
     await archive(id);
@@ -567,8 +650,13 @@ wss.on('connection', (ws: WebSocket, req) => {
     if (rollCallDone || rollCallChecking || rollCallText.length === 0) return;
 
     const meta = await store.readMeta(meetingId).catch(() => null);
-    if (!meta || meta.status !== 'roll_call') {
-      rollCallDone = meta?.status !== 'roll_call';
+    // A transient read failure is not evidence the roll call ended, and neither
+    // is a pause. Latching on either would disable auto-detection for the rest
+    // of the meeting and leave rollCallEndedAt unset.
+    if (!meta) return;
+    if (meta.status === 'paused') return;
+    if (meta.status !== 'roll_call') {
+      rollCallDone = true;
       return;
     }
 
@@ -640,9 +728,12 @@ wss.on('connection', (ws: WebSocket, req) => {
       await store.appendDigest(meetingId, block);
       send({ type: 'digest', block });
     } catch (err) {
-      // The summary is a convenience. Losing a block must never affect the
-      // recording or the minutes, both of which come from other sources.
-      console.warn('[digest] block failed:', err);
+      // The summary is a convenience, but losing the window silently is not:
+      // digestFrom has already advanced, so the gap would be invisible. Put the
+      // text back so the next block covers it.
+      console.warn('[digest] block failed, folding the window into the next one:', err);
+      digestBuffer = [...text.split('\n'), ...digestBuffer];
+      digestFrom = Math.min(digestFrom, from);
     } finally {
       digestRunning = false;
     }
@@ -795,6 +886,12 @@ server.listen(config.port, () => {
 // Do not lose a recording because a request threw somewhere unexpected.
 process.on('unhandledRejection', (reason) => {
   console.error('[fatal] unhandled rejection:', reason);
+});
+
+// A meeting in progress is unrepeatable. Staying up with a logged error beats
+// dying and taking the recording with us.
+process.on('uncaughtException', (err) => {
+  console.error('[fatal] uncaught exception:', err);
 });
 
 const shutdown = () => {
