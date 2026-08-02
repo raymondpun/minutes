@@ -1,0 +1,69 @@
+# Deploy to Cloud Run on every push to main.
+#
+# Auth is keyless: the job's OIDC token is exchanged for GCP credentials via
+# Workload Identity Federation (see setup-cicd.sh -- run once per project).
+# No secrets are stored in GitHub.
+#
+# The deploy deliberately passes no env vars or resource flags: a plain
+# `gcloud run deploy` inherits everything from the current revision, so the
+# service's configuration (models, bucket, retention) stays whatever it was
+# set to and CI only ships code. Changing configuration remains a deliberate,
+# human act -- see DEPLOY.md.
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+# One deploy at a time, in order. A queued push waits for the current deploy
+# rather than racing it; nothing is cancelled mid-rollout.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write # mint the OIDC token that WIF exchanges
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: projects/972941394126/locations/global/workloadIdentityPools/github/providers/github-oidc
+          service_account: github-deploy@ray-minutes-app.iam.gserviceaccount.com
+
+      - uses: google-github-actions/setup-gcloud@v2
+
+      - name: Deploy
+        run: |
+          gcloud run deploy minutes \
+            --source . \
+            --project ray-minutes-app \
+            --region europe-west1 \
+            --quiet
+
+      - name: Verify
+        run: |
+          URL=$(gcloud run services describe minutes \
+            --project ray-minutes-app --region europe-west1 \
+            --format 'value(status.url)')
+          curl -sf "$URL/api/health" | grep -q '"ok":true'
+          echo "Healthy: $URL"
