@@ -1,0 +1,1 @@
+{"root":["./src/App.tsx","./src/main.tsx","./src/types.ts","./src/lib/api.ts","./src/lib/recorder.ts","./src/lib/uplink.ts","./src/lib/wakeLock.ts","./src/screens/MinutesView.tsx","./src/screens/Preflight.tsx","./src/screens/Recording.tsx","./src/screens/Setup.tsx","./src/screens/Speakers.tsx"],"version":"5.9.3"}
