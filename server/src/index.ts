@@ -361,10 +361,24 @@ app.post(
   }),
 );
 
+/**
+ * Downloads read documents from local disk, but on Cloud Run the disk is empty
+ * after every instance restart. The meeting page restores documents when it is
+ * opened; a download link tapped after a restart (or shared directly) must do
+ * the same or it 404s on a meeting that is sitting safely in the bucket.
+ */
+async function restoreDocs(id: string): Promise<void> {
+  if (!gcs.enabled()) return;
+  await gcs
+    .restoreMeeting(id, store.meetingDir(id))
+    .catch((err) => console.warn(`[archive] restore failed for ${id}:`, err));
+}
+
 app.get(
   '/api/meetings/:id/minutes.md',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    await restoreDocs(id);
     const result = await store.readMinutes(id);
     if (!result) return res.status(404).json({ error: 'No minutes yet' });
     res.setHeader('Content-Type', 'text/markdown; charset=utf-8');
@@ -385,6 +399,7 @@ app.get(
   '/api/meetings/:id/minutes.docx',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    await restoreDocs(id);
     const result = await store.readMinutes(id);
     if (!result) return res.status(404).json({ error: 'No minutes yet' });
 
@@ -394,11 +409,20 @@ app.get(
       .replace(/^-|-$/g, '')
       .slice(0, 80);
 
+    // HTTP headers are latin-1; a Chinese title in a bare filename="" throws
+    // ERR_INVALID_CHAR and the download dies as a 500. RFC 5987 splits it:
+    // an ASCII fallback in filename=, the real name percent-encoded in
+    // filename*= -- browsers prefer the latter and show the Chinese properly.
+    const ascii =
+      slug.replace(/[^\x20-\x7e]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '') || id;
     res.setHeader(
       'Content-Type',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     );
-    res.setHeader('Content-Disposition', `attachment; filename="minutes-${slug}.docx"`);
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="minutes-${ascii}.docx"; filename*=UTF-8''${encodeURIComponent(`minutes-${slug}.docx`)}`,
+    );
     res.send(buffer);
   }),
 );
@@ -407,6 +431,7 @@ app.get(
   '/api/meetings/:id/transcript.txt',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    await restoreDocs(id);
     const transcript = await store.readTranscript(id);
     const text = transcript
       .map((s) => `[${formatTimestamp(s.start)}] ${s.speaker}: ${s.text}`)
