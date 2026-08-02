@@ -16,7 +16,7 @@ import { buildTranscript } from './pipeline/transcribe.js';
 import { applySpeakerNames, identifySpeakers } from './pipeline/identify.js';
 import { draftMinutes, renderMarkdown } from './pipeline/minutes.js';
 import { renderDocx } from './pipeline/docx.js';
-import { pcmDurationSeconds, pcmToWav, secondsToByteOffset } from './wav.js';
+import { pcmDurationSeconds, pcmToWav, secondsToByteOffset, wavHeader } from './wav.js';
 import type { MeetingMeta, ServerEvent, SpeakerIdentification } from './types.js';
 
 const app = express();
@@ -479,8 +479,7 @@ async function ensureAudioArchived(id: string): Promise<boolean> {
     if (await gcs.audioExists(id)) return true;
     const size = await store.pcmSize(id);
     if (size === 0) return false;
-    const pcm = await store.readPcmRange(id, 0, size);
-    await gcs.uploadAudio(id, pcmToWav(pcm));
+    await gcs.uploadAudioFromFile(id, store.pcmPath(id), wavHeader(size));
     return true;
   } catch (err) {
     console.warn(`[archive] could not retain audio for ${id}:`, err);
@@ -866,8 +865,13 @@ void (async () => {
         );
       }
     }
-    const all = await store.listMeetings();
-    all.forEach(resumeIfStalled);
+    // One at a time. Each stalled meeting can allocate a large buffer and a
+    // model call, and starting all of them at once on a cold instance is how a
+    // memory-capped container dies at boot -- which creates more stalled
+    // meetings on the next start.
+    for (const meeting of await store.listMeetings()) {
+      resumeIfStalled(meeting);
+    }
   } catch (err) {
     console.warn('[boot] archive restore / stall scan failed:', err);
   }

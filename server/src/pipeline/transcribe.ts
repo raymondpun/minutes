@@ -1,9 +1,9 @@
 import { config } from '../config.js';
 import { audioPart, generateJson } from '../gemini.js';
-import { uploadAudio } from '../gcs.js';
+import { uploadAudioFromFile } from '../gcs.js';
 import { diarizedTranscriptPrompt, TRANSCRIPT_SCHEMA } from '../prompts.js';
 import * as store from '../store.js';
-import { pcmDurationSeconds, pcmToWav, secondsToByteOffset } from '../wav.js';
+import { pcmDurationSeconds, pcmToWav, secondsToByteOffset, wavHeader } from '../wav.js';
 import type { TranscriptSegment } from '../types.js';
 
 interface RawSegments {
@@ -70,8 +70,14 @@ export async function buildTranscript(
 
   if (config.gcsBucket) {
     onProgress('Uploading recording');
-    const pcm = await store.readPcmRange(meetingId, 0, totalBytes);
-    const uri = await uploadAudio(meetingId, pcmToWav(pcm));
+    // Streamed, not buffered: a two hour meeting is ~230 MB and reading it into
+    // memory to prepend 44 bytes doubled that on an instance that is also still
+    // holding the app.
+    const uri = await uploadAudioFromFile(
+      meetingId,
+      store.pcmPath(meetingId),
+      wavHeader(totalBytes),
+    );
 
     onProgress(`Transcribing ${formatDuration(totalSeconds)} of audio in one pass`);
     const result = await generateJson<RawSegments>({

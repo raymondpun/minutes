@@ -63,6 +63,26 @@ export default function Recording({
     return liveLines.filter((l) => l.text.toLowerCase().includes(q));
   }, [liveLines, query]);
 
+  // The level meter updates ten times a second, and each update re-renders this
+  // component. Reconciling a two hour transcript at that rate is sustained
+  // main-thread work on the same thread feeding the audio worklet. Only the
+  // recent tail is mounted; a search still looks at every line, and the whole
+  // transcript is safe on the server either way.
+  const TAIL = 250;
+  const truncated = !searching && visibleLines.length > TAIL;
+  const rendered = truncated ? visibleLines.slice(-TAIL) : visibleLines;
+
+  const lineElements = useMemo(
+    () =>
+      rendered.map((line, i) => (
+        <p className="live-line" key={`${line.start}-${i}`}>
+          <span className="live-time">{formatElapsed(line.start)}</span>
+          {searching ? highlight(line.text, query.trim()) : line.text}
+        </p>
+      )),
+    [rendered, searching, query],
+  );
+
   // Follow along, but never while the chair is reading back through it. Being
   // yanked to the bottom mid-sentence is exactly when this feature fails.
   useEffect(() => {
@@ -278,12 +298,14 @@ export default function Recording({
                 : 'The raw transcript appears here as the meeting runs.'}
             </p>
           ) : (
-            visibleLines.map((line, i) => (
-              <p className="live-line" key={`${line.start}-${i}`}>
-                <span className="live-time">{formatElapsed(line.start)}</span>
-                {searching ? highlight(line.text, query.trim()) : line.text}
-              </p>
-            ))
+            <>
+              {truncated && (
+                <p className="feed-truncated">
+                  Showing the last {TAIL} lines. Search to reach anything earlier.
+                </p>
+              )}
+              {lineElements}
+            </>
           )}
         </div>
 

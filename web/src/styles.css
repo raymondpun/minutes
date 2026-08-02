@@ -785,6 +785,14 @@ button:disabled {
   margin-right: 8px;
 }
 
+.feed-truncated {
+  font-size: 12px;
+  color: var(--ink-faint);
+  text-align: center;
+  padding-bottom: 4px;
+  border-bottom: 1px dashed var(--rule);
+}
+
 .feed-empty {
   margin: auto;
   color: var(--ink-faint);

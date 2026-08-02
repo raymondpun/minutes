@@ -1,5 +1,8 @@
+import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import path from 'node:path';
+import { pipeline } from 'node:stream/promises';
+import { Readable } from 'node:stream';
 import { Storage } from '@google-cloud/storage';
 import { config } from './config.js';
 
@@ -29,6 +32,36 @@ export async function uploadAudio(
     contentType,
     resumable: false,
   });
+  return `gs://${config.gcsBucket}/${objectName}`;
+}
+
+/**
+ * Upload the recording without ever holding it in memory.
+ *
+ * A two hour meeting is ~230 MB, and reading it into a Buffer then concatenating
+ * a WAV header made a second full copy -- ~460 MB peak on an instance that also
+ * has to keep capturing audio. The header is 44 bytes and the rest is the file,
+ * so stream both straight through.
+ */
+export async function uploadAudioFromFile(
+  meetingId: string,
+  pcmPath: string,
+  header: Buffer,
+): Promise<string> {
+  if (!config.gcsBucket) throw new Error('GCS_BUCKET is not configured');
+  const objectName = `meetings/${meetingId}/audio.wav`;
+
+  const target = client()
+    .bucket(config.gcsBucket)
+    .file(objectName)
+    .createWriteStream({ contentType: 'audio/wav', resumable: true });
+
+  async function* body() {
+    yield header;
+    for await (const chunk of fs.createReadStream(pcmPath)) yield chunk as Buffer;
+  }
+
+  await pipeline(Readable.from(body()), target);
   return `gs://${config.gcsBucket}/${objectName}`;
 }
 

@@ -9,6 +9,11 @@ import { AUDIO } from './config.js';
  * MediaRecorder blobs.
  */
 export function pcmToWav(pcm: Buffer, sampleRate = AUDIO.sampleRate): Buffer {
+  return Buffer.concat([wavHeader(pcm.length, sampleRate), pcm]);
+}
+
+/** The 44 byte header on its own, so a large recording can be streamed after it. */
+export function wavHeader(dataLength: number, sampleRate = AUDIO.sampleRate): Buffer {
   const channels = AUDIO.channels;
   const bitsPerSample = AUDIO.bytesPerSample * 8;
   const byteRate = (sampleRate * channels * bitsPerSample) / 8;
@@ -16,7 +21,7 @@ export function pcmToWav(pcm: Buffer, sampleRate = AUDIO.sampleRate): Buffer {
 
   const header = Buffer.alloc(44);
   header.write('RIFF', 0);
-  header.writeUInt32LE(36 + pcm.length, 4);
+  header.writeUInt32LE(36 + dataLength, 4);
   header.write('WAVE', 8);
   header.write('fmt ', 12);
   header.writeUInt32LE(16, 16); // PCM fmt chunk size
@@ -27,9 +32,9 @@ export function pcmToWav(pcm: Buffer, sampleRate = AUDIO.sampleRate): Buffer {
   header.writeUInt16LE(blockAlign, 32);
   header.writeUInt16LE(bitsPerSample, 34);
   header.write('data', 36);
-  header.writeUInt32LE(pcm.length, 40);
+  header.writeUInt32LE(dataLength, 40);
 
-  return Buffer.concat([header, pcm]);
+  return header;
 }
 
 export function pcmDurationSeconds(byteLength: number): number {

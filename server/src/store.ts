@@ -243,8 +243,18 @@ export async function readPcmRange(
   try {
     const length = Math.max(0, endByte - startByte);
     const buf = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(buf, 0, length, startByte);
-    return buf.subarray(0, bytesRead);
+    // A single read can return fewer bytes than asked for, and at 10 MB a
+    // segment that would silently hand a truncated clip to the model -- or,
+    // on an odd byte count, half a sample. Loop until it is full or the file
+    // ends.
+    let filled = 0;
+    while (filled < length) {
+      const { bytesRead } = await handle.read(buf, filled, length - filled, startByte + filled);
+      if (bytesRead === 0) break;
+      filled += bytesRead;
+    }
+    // Never end mid-sample.
+    return buf.subarray(0, filled - (filled % 2));
   } finally {
     await handle.close();
   }
