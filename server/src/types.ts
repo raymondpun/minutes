@@ -90,9 +90,17 @@ export interface Evidence {
   quote: string;
 }
 
+/**
+ * The minutes are bilingual: every drafted part carries a parallel rendering
+ * in formal written Chinese (書面語, Traditional characters as used in Hong
+ * Kong) -- a translation of the drafted English, never a transcription of the
+ * colloquial Cantonese actually spoken. The Zh fields are optional because
+ * minutes drafted before this existed still have to render.
+ */
 export interface ActionItem {
   owner: string;
   action: string;
+  actionZh?: string | null;
   dueDate: string | null;
   evidence: Evidence | null;
   confidence: 'high' | 'medium' | 'low';
@@ -100,6 +108,7 @@ export interface ActionItem {
 
 export interface Motion {
   text: string;
+  textZh?: string | null;
   proposedBy: string | null;
   secondedBy: string | null;
   outcome: 'carried' | 'carried unanimously' | 'defeated' | 'withdrawn' | 'deferred' | 'unclear';
@@ -114,10 +123,14 @@ export interface MinuteItem {
   /** e.g. "4" or "4.2". */
   number: string;
   heading: string;
+  headingZh?: string | null;
   /** Formal English prose. Past tense, third person, no direct address. */
   discussion: string;
+  discussionZh?: string | null;
   /** RESOLVED THAT ... statements. */
   resolutions: string[];
+  /** Parallel to resolutions, index for index. */
+  resolutionsZh?: string[];
   motions: Motion[];
   actions: ActionItem[];
   evidence: Evidence[];
@@ -139,6 +152,7 @@ export interface Minutes {
   /** Things the model could not resolve and a human must check before sign-off. */
   flaggedForReview: string[];
   nextMeeting: string | null;
+  nextMeetingZh?: string | null;
 }
 
 /**

@@ -93,7 +93,51 @@ function backfill(
     items: minutes.items ?? [],
     flaggedForReview: [...flags],
     nextMeeting: minutes.nextMeeting ?? null,
+    nextMeetingZh: minutes.nextMeetingZh ?? null,
   };
+}
+
+/* ------------------------------------------------------- chinese fixtures --- */
+
+/**
+ * The outcome enum is model output; its Chinese is not. A fixed mapping keeps
+ * the one line a committee actually argues about -- did it pass -- from ever
+ * being mistranslated. Shared with the DOCX renderer.
+ */
+export function outcomeZh(outcome: Minutes['items'][number]['motions'][number]['outcome']): string {
+  switch (outcome) {
+    case 'carried':
+      return '獲得通過';
+    case 'carried unanimously':
+      return '一致通過';
+    case 'defeated':
+      return '被否決';
+    case 'withdrawn':
+      return '撤回';
+    case 'deferred':
+      return '押後';
+    case 'unclear':
+      return '結果不明';
+  }
+}
+
+/** e.g. 4票贊成、1票反對、2票棄權 -- empty string when no count was taken. */
+export function votesZh(motion: {
+  votesFor: number | null;
+  votesAgainst: number | null;
+  abstentions: number | null;
+}): string {
+  const parts = [
+    motion.votesFor != null ? `${motion.votesFor}票贊成` : null,
+    motion.votesAgainst != null ? `${motion.votesAgainst}票反對` : null,
+    motion.abstentions != null ? `${motion.abstentions}票棄權` : null,
+  ].filter(Boolean);
+  return parts.length ? `（${parts.join('、')}）` : '';
+}
+
+/** The prompt says not to lead with 議決, but the model sometimes does anyway. */
+export function stripResolvedZh(text: string): string {
+  return text.replace(/^\s*議決[:：]?\s*/, '');
 }
 
 /* -------------------------------------------------------------- rendering --- */
@@ -132,10 +176,14 @@ export function renderMarkdown(minutes: Minutes): string {
   p();
 
   for (const item of minutes.items) {
-    p(`### ${item.number}. ${item.heading}`);
+    p(`### ${item.number}. ${item.heading}${item.headingZh ? ` / ${item.headingZh}` : ''}`);
     p();
     if (item.discussion) {
       p(item.discussion);
+      p();
+    }
+    if (item.discussionZh) {
+      p(item.discussionZh);
       p();
     }
 
@@ -144,6 +192,7 @@ export function renderMarkdown(minutes: Minutes): string {
       if (motion.proposedBy) parts.push(`proposed by ${motion.proposedBy}`);
       if (motion.secondedBy) parts.push(`seconded by ${motion.secondedBy}`);
       p(`> **Motion:** ${motion.text}`);
+      if (motion.textZh) p(`> **動議：** ${motion.textZh}`);
       if (parts.length) p(`> *${capitalise(parts.join(', '))}.*`);
       const votes = [
         motion.votesFor != null ? `${motion.votesFor} for` : null,
@@ -151,24 +200,25 @@ export function renderMarkdown(minutes: Minutes): string {
         motion.abstentions != null ? `${motion.abstentions} abstaining` : null,
       ].filter(Boolean);
       p(
-        `> **Outcome:** ${capitalise(motion.outcome)}${votes.length ? ` (${votes.join(', ')})` : ''}${flag(motion.confidence)}`,
+        `> **Outcome:** ${capitalise(motion.outcome)}${votes.length ? ` (${votes.join(', ')})` : ''} / ${outcomeZh(motion.outcome)}${votesZh(motion)}${flag(motion.confidence)}`,
       );
       if (motion.evidence) p(`> ${cite(motion.evidence.time, motion.evidence.quote)}`);
       p();
     }
 
-    for (const resolution of item.resolutions ?? []) {
+    (item.resolutions ?? []).forEach((resolution, i) => {
       p(`**RESOLVED THAT** ${stripResolved(resolution)}`);
+      const zh = item.resolutionsZh?.[i];
+      if (zh) p(`**議決** ${stripResolvedZh(zh)}`);
       p();
-    }
+    });
 
     if (item.actions?.length) {
-      p('| Action | Owner | By when |');
+      p('| Action 行動 | Owner 負責人 | By when 期限 |');
       p('| --- | --- | --- |');
       for (const a of item.actions) {
-        p(
-          `| ${escapeCell(a.action)}${flag(a.confidence)} | ${escapeCell(a.owner)} | ${escapeCell(a.dueDate ?? '—')} |`,
-        );
+        const action = `${escapeCell(a.action)}${a.actionZh ? `<br>${escapeCell(a.actionZh)}` : ''}`;
+        p(`| ${action}${flag(a.confidence)} | ${escapeCell(a.owner)} | ${escapeCell(a.dueDate ?? '—')} |`);
       }
       p();
     }
@@ -188,10 +238,14 @@ export function renderMarkdown(minutes: Minutes): string {
   }
 
   if (minutes.nextMeeting) {
-    p(`### Date of next meeting`);
+    p(`### Date of next meeting / 下次會議日期`);
     p();
     p(minutes.nextMeeting);
     p();
+    if (minutes.nextMeetingZh) {
+      p(minutes.nextMeetingZh);
+      p();
+    }
   }
 
   if (minutes.flaggedForReview?.length) {

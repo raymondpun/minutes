@@ -81,6 +81,7 @@ export interface Evidence {
 export interface ActionItem {
   owner: string;
   action: string;
+  actionZh?: string | null;
   dueDate: string | null;
   evidence: Evidence | null;
   confidence: 'high' | 'medium' | 'low';
@@ -88,6 +89,7 @@ export interface ActionItem {
 
 export interface Motion {
   text: string;
+  textZh?: string | null;
   proposedBy: string | null;
   secondedBy: string | null;
   outcome:
@@ -107,8 +109,12 @@ export interface Motion {
 export interface MinuteItem {
   number: string;
   heading: string;
+  headingZh?: string | null;
   discussion: string;
+  discussionZh?: string | null;
   resolutions: string[];
+  /** Parallel to resolutions, index for index. */
+  resolutionsZh?: string[];
   motions: Motion[];
   actions: ActionItem[];
   evidence: Evidence[];
@@ -129,6 +135,7 @@ export interface Minutes {
   items: MinuteItem[];
   flaggedForReview: string[];
   nextMeeting: string | null;
+  nextMeetingZh?: string | null;
 }
 
 export interface MeetingSnapshot {

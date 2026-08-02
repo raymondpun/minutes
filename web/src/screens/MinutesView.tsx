@@ -135,9 +135,10 @@ export default function MinutesView({
           <section className="item">
             <h3 className="item-heading">
               <span className="item-number">·</span>
-              <span>Date of next meeting</span>
+              <span>Date of next meeting / 下次會議日期</span>
             </h3>
             <p>{minutes.nextMeeting}</p>
+            {minutes.nextMeetingZh && <p>{minutes.nextMeetingZh}</p>}
           </section>
         )}
 
@@ -226,7 +227,10 @@ function Item({
     <section className="item">
       <h3 className="item-heading">
         <span className="item-number">{item.number}.</span>
-        <span>{item.heading}</span>
+        <span>
+          {item.heading}
+          {item.headingZh ? ` / ${item.headingZh}` : ''}
+        </span>
       </h3>
 
       {item.discussion
@@ -234,6 +238,12 @@ function Item({
         .filter(Boolean)
         .map((para, i) => (
           <p key={i}>{para}</p>
+        ))}
+      {(item.discussionZh ?? '')
+        .split('\n')
+        .filter(Boolean)
+        .map((para, i) => (
+          <p key={`zh-${i}`}>{para}</p>
         ))}
 
       {item.motions?.map((motion, i) => (
@@ -244,6 +254,12 @@ function Item({
         <div className="resolution" key={i}>
           <span className="kicker">RESOLVED THAT</span>
           {resolution.replace(/^\s*resolved\s+that\s+/i, '')}
+          {item.resolutionsZh?.[i] && (
+            <div>
+              <span className="kicker">議決</span>
+              {item.resolutionsZh[i].replace(/^\s*議決[:：]?\s*/, '')}
+            </div>
+          )}
         </div>
       ))}
 
@@ -261,6 +277,7 @@ function Item({
               <tr key={i}>
                 <td>
                   {action.action}
+                  {action.actionZh && <div>{action.actionZh}</div>}
                   {action.confidence === 'low' && (
                     <span className="verify-tag">VERIFY</span>
                   )}
@@ -285,6 +302,24 @@ function Item({
       )}
     </section>
   );
+}
+
+/** Fixed mapping, mirroring the server's: the verdict is never left to the model to translate. */
+function outcomeZh(outcome: Motion['outcome']): string {
+  switch (outcome) {
+    case 'carried':
+      return '獲得通過';
+    case 'carried unanimously':
+      return '一致通過';
+    case 'defeated':
+      return '被否決';
+    case 'withdrawn':
+      return '撤回';
+    case 'deferred':
+      return '押後';
+    case 'unclear':
+      return '結果不明';
+  }
 }
 
 function MotionBlock({
@@ -312,6 +347,12 @@ function MotionBlock({
     <div className="motion">
       <span className="kicker">MOTION</span>
       {motion.text}
+      {motion.textZh && (
+        <div>
+          <span className="kicker">動議</span>
+          {motion.textZh}
+        </div>
+      )}
       {(motion.proposedBy || motion.secondedBy) && (
         <div className="motion-meta">
           {motion.proposedBy && `Proposed by ${motion.proposedBy}`}
@@ -323,6 +364,7 @@ function MotionBlock({
           lines stops reading as a pill. */}
       <div className="outcome-row">
         <span className={`outcome ${tone}`}>{motion.outcome}</span>
+        <span className={`outcome ${tone}`}>{outcomeZh(motion.outcome)}</span>
         {votes.length > 0 && <span className="tally">{votes.join(' · ')}</span>}
       </div>
       {motion.evidence && (

@@ -429,20 +429,39 @@ Use real names throughout the minutes. Where a speaker is UNIDENTIFIED, write
 note so the secretary can fill in the name.
 
 LANGUAGE OF THE MINUTES
-The meeting was conducted in Cantonese mixed with English. THE MINUTES MUST BE
-WRITTEN IN FORMAL BUSINESS ENGLISH. You are translating as you draft.
+The meeting was conducted in Cantonese mixed with English. THE MINUTES ARE
+BILINGUAL: every drafted part is written twice, once in FORMAL BUSINESS
+ENGLISH and once in FORMAL WRITTEN CHINESE. You are translating as you draft.
 
   - Translate the substance faithfully. Do not soften a disagreement, do not
     upgrade a "maybe" into a commitment, and do not resolve an ambiguity that
-    the speakers left open. If the Cantonese was hedged, the English must be
+    the speakers left open. If the Cantonese was hedged, both versions must be
     hedged.
   - Keep terms that Hong Kong business English keeps in English anyway
-    (KPI, headcount, Q3, AGM, HKD).
+    (KPI, headcount, Q3, AGM, HKD) -- in both versions.
   - Convert money and dates to a consistent formal form: HK$3,000,000 and
-    31 December 2026.
+    31 December 2026 in English; 港幣3,000,000元 and 2026年12月31日 in Chinese.
   - EVERY evidence quote must remain in the ORIGINAL language, verbatim, in 口語
     Cantonese exactly as it appears in the transcript. Never translate a quote.
     The quote is what lets a reader verify your translation was fair.
+
+THE CHINESE VERSION (the *Zh fields)
+  - 書面語 only: formal written Chinese in Traditional characters as used in
+    Hong Kong official documents. NEVER colloquial Cantonese -- no 係/喺/嘅/咗/
+    唔/啲. The Chinese version is a translation of the drafted English, not a
+    cleaned-up transcription of what was said.
+  - Register to match: 動議 for a motion, 議決 for a resolution, 主席 for the
+    chair, 委員會 for a committee. The style of a 香港 government or listed
+    company 會議紀錄.
+  - People keep the name they were addressed by. Do not invent Chinese names
+    for people addressed in English, or English names for people addressed in
+    Chinese.
+  - headingZh, discussionZh and textZh/actionZh carry the same substance as
+    their English counterparts -- a reader of either language alone must come
+    away with the same understanding.
+  - resolutionsZh parallels resolutions index for index, each in the
+    conventional form 議決 followed by the substance (the renderer adds the
+    議決 label, so do not begin the string with it).
 
 HOUSE STYLE FOR FORMAL MINUTES
   - Third person, past tense, reported speech throughout.
@@ -513,14 +532,18 @@ export const MINUTES_SCHEMA = {
         properties: {
           number: { type: 'string' },
           heading: { type: 'string' },
+          headingZh: { type: 'string' },
           discussion: { type: 'string' },
+          discussionZh: { type: 'string' },
           resolutions: { type: 'array', items: { type: 'string' } },
+          resolutionsZh: { type: 'array', items: { type: 'string' } },
           motions: {
             type: 'array',
             items: {
               type: 'object',
               properties: {
                 text: { type: 'string' },
+                textZh: { type: 'string' },
                 proposedBy: { type: 'string', nullable: true },
                 secondedBy: { type: 'string', nullable: true },
                 outcome: {
@@ -540,7 +563,7 @@ export const MINUTES_SCHEMA = {
                 evidence: EVIDENCE_SCHEMA,
                 confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
               },
-              required: ['text', 'outcome', 'confidence'],
+              required: ['text', 'textZh', 'outcome', 'confidence'],
             },
           },
           actions: {
@@ -550,11 +573,12 @@ export const MINUTES_SCHEMA = {
               properties: {
                 owner: { type: 'string' },
                 action: { type: 'string' },
+                actionZh: { type: 'string' },
                 dueDate: { type: 'string', nullable: true },
                 evidence: EVIDENCE_SCHEMA,
                 confidence: { type: 'string', enum: ['high', 'medium', 'low'] },
               },
-              required: ['owner', 'action', 'confidence'],
+              required: ['owner', 'action', 'actionZh', 'confidence'],
             },
           },
           evidence: {
@@ -569,11 +593,22 @@ export const MINUTES_SCHEMA = {
             },
           },
         },
-        required: ['number', 'heading', 'discussion', 'resolutions', 'motions', 'actions'],
+        required: [
+          'number',
+          'heading',
+          'headingZh',
+          'discussion',
+          'discussionZh',
+          'resolutions',
+          'resolutionsZh',
+          'motions',
+          'actions',
+        ],
       },
     },
     flaggedForReview: { type: 'array', items: { type: 'string' } },
     nextMeeting: { type: 'string', nullable: true },
+    nextMeetingZh: { type: 'string', nullable: true },
   },
   required: ['bodyName', 'title', 'date', 'location', 'present', 'items', 'flaggedForReview'],
 } as const;

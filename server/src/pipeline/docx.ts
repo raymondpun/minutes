@@ -12,6 +12,7 @@ import {
   WidthType,
 } from 'docx';
 import type { Evidence, MinuteItem, Minutes } from '../types.js';
+import { outcomeZh, stripResolvedZh, votesZh } from './minutes.js';
 
 /**
  * Render the minutes as a Word document.
@@ -138,7 +139,7 @@ export async function renderDocx(minutes: Minutes): Promise<Buffer> {
         spacing: { before: 320, after: 120 },
         children: [
           new TextRun({
-            text: 'Date of next meeting',
+            text: 'Date of next meeting / 下次會議日期',
             font: { ascii: SANS, hAnsi: SANS, eastAsia: CJK },
             size: 24,
             bold: true,
@@ -146,6 +147,9 @@ export async function renderDocx(minutes: Minutes): Promise<Buffer> {
         ],
       }),
       new Paragraph({ children: [text(minutes.nextMeeting)] }),
+      ...(minutes.nextMeetingZh
+        ? [new Paragraph({ children: [text(minutes.nextMeetingZh)] })]
+        : []),
     );
   }
 
@@ -219,7 +223,7 @@ function renderItem(item: MinuteItem): Block[] {
       spacing: { before: 320, after: 120 },
       children: [
         new TextRun({
-          text: `${item.number}.   ${item.heading}`,
+          text: `${item.number}.   ${item.heading}${item.headingZh ? ` / ${item.headingZh}` : ''}`,
           font: { ascii: SANS, hAnsi: SANS, eastAsia: CJK },
           size: 24,
           bold: true,
@@ -228,14 +232,19 @@ function renderItem(item: MinuteItem): Block[] {
     }),
   );
 
-  for (const para of item.discussion.split('\n').filter(Boolean)) {
-    out.push(
-      new Paragraph({
-        spacing: { after: 140, line: 300 },
-        alignment: AlignmentType.JUSTIFIED,
-        children: [text(para)],
-      }),
-    );
+  // English first, then the 書面語 version of the same discussion beneath it —
+  // the interleaved layout, so a reader of either language never leaves the item.
+  const discussions = [item.discussion, item.discussionZh ?? ''];
+  for (const block of discussions) {
+    for (const para of block.split('\n').filter(Boolean)) {
+      out.push(
+        new Paragraph({
+          spacing: { after: 140, line: 300 },
+          alignment: AlignmentType.JUSTIFIED,
+          children: [text(para)],
+        }),
+      );
+    }
   }
 
   for (const motion of item.motions ?? []) {
@@ -252,6 +261,15 @@ function renderItem(item: MinuteItem): Block[] {
         children: [label('MOTION   '), text(motion.text)],
       }),
     );
+    if (motion.textZh) {
+      out.push(
+        new Paragraph({
+          indent: { left: 480 },
+          spacing: { after: 40 },
+          children: [label('動議   '), text(motion.textZh)],
+        }),
+      );
+    }
     if (motion.proposedBy || motion.secondedBy) {
       out.push(
         new Paragraph({
@@ -278,6 +296,7 @@ function renderItem(item: MinuteItem): Block[] {
         children: [
           text(`Outcome: ${motion.outcome}`, { bold: true }),
           text(votes.length ? ` (${votes.join(', ')})` : ''),
+          text(` / ${outcomeZh(motion.outcome)}${votesZh(motion)}`),
           ...(motion.confidence === 'low' ? [text('  [TO VERIFY]', { bold: true })] : []),
         ],
       }),
@@ -285,18 +304,28 @@ function renderItem(item: MinuteItem): Block[] {
     if (motion.evidence) out.push(quote(motion.evidence));
   }
 
-  for (const resolution of item.resolutions ?? []) {
+  (item.resolutions ?? []).forEach((resolution, i) => {
+    const zh = item.resolutionsZh?.[i];
     out.push(
       new Paragraph({
         indent: { left: 480 },
-        spacing: { before: 100, after: 160 },
+        spacing: { before: 100, after: zh ? 40 : 160 },
         children: [
           text('RESOLVED THAT ', { bold: true }),
           text(resolution.replace(/^\s*resolved\s+that\s+/i, '')),
         ],
       }),
     );
-  }
+    if (zh) {
+      out.push(
+        new Paragraph({
+          indent: { left: 480 },
+          spacing: { after: 160 },
+          children: [text('議決 ', { bold: true }), text(stripResolvedZh(zh))],
+        }),
+      );
+    }
+  });
 
   if (item.actions?.length) {
     out.push(
@@ -305,10 +334,10 @@ function renderItem(item: MinuteItem): Block[] {
     const rows = [
       new TableRow({
         tableHeader: true,
-        children: ['Action', 'Owner', 'By when'].map(
+        children: ['ACTION 行動', 'OWNER 負責人', 'BY WHEN 期限'].map(
           (h) =>
             new TableCell({
-              children: [new Paragraph({ children: [label(h.toUpperCase())] })],
+              children: [new Paragraph({ children: [label(h)] })],
             }),
         ),
       }),
@@ -326,6 +355,9 @@ function renderItem(item: MinuteItem): Block[] {
                         : []),
                     ],
                   }),
+                  ...(a.actionZh
+                    ? [new Paragraph({ children: [text(a.actionZh)] })]
+                    : []),
                 ],
               }),
               new TableCell({ children: [new Paragraph({ children: [text(a.owner)] })] }),

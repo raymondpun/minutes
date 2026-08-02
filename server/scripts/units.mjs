@@ -180,12 +180,16 @@ let minutesFixture;
       {
         number: '1',
         heading: 'Q3 Financial Review',
+        headingZh: '第三季度財務審閱',
         discussion:
           'The Finance Director reported that revenue for the quarter was below forecast.',
+        discussionZh: '財務總監報告，本季度收入低於預測。',
         resolutions: ['RESOLVED THAT the Q3 accounts be approved as presented.'],
+        resolutionsZh: ['議決：批准第三季度帳目。'],
         motions: [
           {
             text: 'That the Q3 accounts be approved.',
+            textZh: '批准第三季度帳目。',
             proposedBy: 'Raymond Pun',
             secondedBy: 'Cheryl Lau',
             outcome: 'carried',
@@ -200,6 +204,7 @@ let minutesFixture;
           {
             owner: 'Cheryl Lau',
             action: 'Circulate the revised forecast | with margins',
+            actionZh: '向各成員傳閱經修訂的預測',
             dueDate: '31 August 2026',
             evidence: { time: 1040, quote: '我下星期 send 個 forecast 俾大家' },
             confidence: 'high',
@@ -238,7 +243,16 @@ let minutesFixture;
     md.includes('**RESOLVED THAT** the Q3 accounts be approved as presented.') &&
       !md.includes('RESOLVED THAT RESOLVED THAT'),
   );
-  check('action table header', md.includes('| Action | Owner | By when |'));
+  check('action table header', md.includes('| Action 行動 | Owner 負責人 | By when 期限 |'));
+  check('bilingual heading', md.includes('### 1. Q3 Financial Review / 第三季度財務審閱'));
+  check('bilingual discussion', md.includes('財務總監報告，本季度收入低於預測。'));
+  check('bilingual motion', md.includes('> **動議：** 批准第三季度帳目。'));
+  check('outcome in both languages', md.includes('Carried (4 for, 1 against, 0 abstaining) / 獲得通過（4票贊成、1票反對、0票棄權）'));
+  check(
+    '議決 label not duplicated',
+    md.includes('**議決** 批准第三季度帳目。') && !md.includes('議決 議決'),
+  );
+  check('bilingual action cell', md.includes('Circulate the revised forecast \\| with margins<br>向各成員傳閱經修訂的預測'));
   check(
     'pipe in action text escaped',
     md.includes('Circulate the revised forecast \\| with margins'),
