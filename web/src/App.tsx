@@ -605,7 +605,8 @@ function Review({
         {meta.durationSeconds
           ? `${Math.round(meta.durationSeconds / 60)} minutes of audio. `
           : ''}
-        You can lock the phone — this keeps running on the server.
+        Keep this screen open if you can — it holds the server awake. Locking
+        the phone will not lose anything, but it may pause until you come back.
       </p>
     </div>
   );
