@@ -182,6 +182,10 @@ Browsers refuse microphone access outside a secure context, so a phone
 ./deploy.sh YOUR_PROJECT_ID asia-east2     # Cloud Run, real HTTPS, ~5 min
 ```
 
+**→ [DEPLOY.md](DEPLOY.md) is the full step-by-step**: project setup, billing,
+the bucket, environment variables, why there are no API keys, locking the URL
+down, rolling back, watching the cost, and a troubleshooting table.
+
 or, for a quick test against your laptop:
 
 ```bash
