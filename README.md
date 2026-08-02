@@ -182,9 +182,11 @@ Browsers refuse microphone access outside a secure context, so a phone
 ./deploy.sh YOUR_PROJECT_ID asia-east2     # Cloud Run, real HTTPS, ~5 min
 ```
 
-**→ [DEPLOY.md](DEPLOY.md) is the full step-by-step**: project setup, billing,
-the bucket, environment variables, why there are no API keys, locking the URL
-down, rolling back, watching the cost, and a troubleshooting table.
+**→ [DEPLOY.md](DEPLOY.md) is the full step-by-step, and it needs nothing
+installed locally** — the whole deployment runs in Cloud Shell, a terminal in
+your browser that already has gcloud, Node and git. Covers project setup,
+billing, the bucket, environment variables, why there are no API keys, locking
+the URL down, rolling back, cost, and a troubleshooting table.
 
 or, for a quick test against your laptop:
 

@@ -1,88 +1,81 @@
 # Deploying to Google Cloud
 
-Start to finish, about 20 minutes. Most of it is waiting for the first build.
+Start to finish, about 25 minutes. Most of it is waiting for the first build.
+
+**You do not need to install anything.** The whole deployment runs in Cloud
+Shell — a terminal in your browser with `gcloud`, Node and git already there,
+already signed in as you. Nothing is cloned to your laptop and nothing is
+installed on it.
 
 **There are no API keys in this app.** If you are looking for where to paste a
-secret, there isn't one — see [Secrets](#secrets) for why, and what to do if you
-ever add something that genuinely is one.
+secret, there isn't one — see [Secrets](#secrets) for why.
 
 ---
 
-## Before you start
+## Contents
 
-You need:
-
-- A Google account with **billing enabled** on a Cloud project. Vertex AI will
-  not serve requests without it, even inside the free tier.
-- The `gcloud` CLI — [install instructions](https://cloud.google.com/sdk/docs/install).
-- Node 20 or newer.
-- About US$1–2 of Vertex usage per two-hour meeting, plus pennies of storage.
-  Cloud Run itself is free while idle.
-
-Check `gcloud` is there:
-
-```bash
-gcloud version
-```
+- [Part 1 — Set up the project](#part-1--set-up-the-project) *(console + Cloud Shell)*
+- [Part 2 — Deploy](#part-2--deploy) *(Cloud Shell)*
+- [Part 3 — Prove it works](#part-3--prove-it-works)
+- [Part 4 — Put it on your phone](#part-4--put-it-on-your-phone)
+- [Part 5 — Deploy automatically on every push](#part-5--deploy-automatically-on-every-push) *(optional)*
+- [Environment variables](#environment-variables)
+- [Secrets](#secrets)
+- [Locking it down](#locking-it-down)
+- [Updating and rolling back](#updating-and-rolling-back)
+- [Watching the cost](#watching-the-cost)
+- [Troubleshooting](#troubleshooting)
+- [Tearing it down](#tearing-it-down)
 
 ---
 
-## Step 1 — Pick or create a project
+# Part 1 — Set up the project
 
-If you already have one, note its **project ID** (not the display name — the ID,
-which looks like `minutes-app-472913`):
+## 1.1 Create the project
 
-```bash
-gcloud projects list
-```
+If you already ran `gcloud projects create`, you have this. Otherwise, easiest
+in the console: [console.cloud.google.com/projectcreate](https://console.cloud.google.com/projectcreate).
 
-To create a new one:
+Note the **project ID** (like `ray-minutes-app`), not the display name.
 
-```bash
-gcloud projects create my-minutes-app --name="Minutes"
-gcloud config set project my-minutes-app
-```
+> **"My project isn't in `gcloud projects list`"** — normal. That list is
+> eventually consistent and lags by a minute or two after creation. Confirm it
+> exists with `gcloud projects describe ray-minutes-app`, which is immediate.
+>
+> **"lacks an 'environment' tag"** — advisory, not an error. Ignore it.
 
-Then link billing. Easiest in the console —
+## 1.2 Link billing — and verify it
+
+Do this in the console:
 [console.cloud.google.com/billing](https://console.cloud.google.com/billing) →
-select the project → link a billing account. Or:
+select the project → link a billing account.
+
+**Verify it actually took.** In Cloud Shell (see 1.3) or anywhere with gcloud:
 
 ```bash
-gcloud billing accounts list
-gcloud billing projects link my-minutes-app --billing-account=XXXXXX-XXXXXX-XXXXXX
+gcloud billing projects describe ray-minutes-app
 ```
 
-**Verify billing is actually on** before going further, because the failure
-later is an opaque permissions error:
+You need `billingEnabled: true`. Be fussy here: **Vertex serves nothing without
+billing**, and the failure later is an opaque `PERMISSION_DENIED` that looks
+like an IAM problem. Two minutes now saves half an hour chasing the wrong thing.
+
+## 1.3 Open Cloud Shell
+
+Go to **[shell.cloud.google.com](https://shell.cloud.google.com)**, or click the
+`>_` icon in the top right of any Google Cloud console page.
+
+You get a terminal in the browser, already authenticated as your Google account,
+with `gcloud`, `git`, Node and npm installed. It has a 5 GB home directory that
+persists between sessions.
+
+Set your project:
 
 ```bash
-gcloud billing projects describe my-minutes-app
-# billingEnabled: true
+gcloud config set project ray-minutes-app
 ```
 
----
-
-## Step 2 — Log in
-
-Two different logins, and both are needed:
-
-```bash
-# Lets the gcloud CLI act as you.
-gcloud auth login
-
-# Lets code running on your machine call Google APIs as you.
-gcloud auth application-default login
-```
-
-The second one is what `npm run check` uses. Skipping it is the most common
-reason the check fails at step 2 of its own output.
-
----
-
-## Step 3 — Enable the APIs
-
-`deploy.sh` does this for you, but doing it now surfaces billing problems before
-you've waited for a build:
+## 1.4 Enable the APIs
 
 ```bash
 gcloud services enable \
@@ -90,83 +83,137 @@ gcloud services enable \
   aiplatform.googleapis.com \
   cloudbuild.googleapis.com \
   storage.googleapis.com \
-  --project my-minutes-app
+  artifactregistry.googleapis.com
 ```
 
----
+Takes a minute. If this errors about billing, go back to 1.2.
 
-## Step 4 — Create a storage bucket
+## 1.5 Create the storage bucket
 
 Optional, but do it. Without a bucket:
 
 - Meetings over ~5 minutes are transcribed in segments, and speaker labels drift
   across every seam.
-- Nothing survives a Cloud Run restart, and with scale-to-zero that is between
-  every meeting. Your history disappears.
+- **Nothing survives a restart**, and with scale-to-zero that is between every
+  meeting. Your history disappears.
 - Audio cannot be retained, so the play buttons under each quote never work.
 
-Bucket names are globally unique, so prefix it with your project:
+Bucket names are globally unique, so prefix with your project ID:
 
 ```bash
-gcloud storage buckets create gs://my-minutes-app-recordings \
+gcloud storage buckets create gs://ray-minutes-app-recordings \
   --location=asia-east2 \
-  --uniform-bucket-level-access \
-  --project my-minutes-app
+  --uniform-bucket-level-access
 ```
 
-Pick the location closest to you — `asia-east2` is Hong Kong, `asia-southeast1`
-Singapore, `europe-west2` London. Keep it in the same region you deploy to.
+Pick the region closest to you and **use the same one throughout**:
+`asia-east2` Hong Kong · `asia-southeast1` Singapore · `europe-west2` London ·
+`us-central1` Iowa.
 
 ---
 
-## Step 5 — Configure locally
+# Part 2 — Deploy
+
+All of this is in Cloud Shell.
+
+## 2.1 Get the code
+
+The repository is private, so Cloud Shell needs permission to read it.
 
 ```bash
-git clone https://github.com/raymondpun/minutes.git
+gh auth login
+```
+
+Choose **GitHub.com** → **HTTPS** → **Login with a web browser**, and follow the
+code it gives you. Then:
+
+```bash
+gh repo clone raymondpun/minutes -- -b develop
 cd minutes
-git checkout develop
+```
+
+<details>
+<summary>If <code>gh</code> is unavailable</summary>
+
+Create a personal access token at
+[github.com/settings/tokens](https://github.com/settings/tokens) with `repo`
+scope, then:
+
+```bash
+git clone -b develop https://github.com/raymondpun/minutes.git
+# Username: your github username
+# Password: paste the token (not your GitHub password)
+```
+</details>
+
+> **The code is on `develop`, not `main`.** `main` is an empty commit that only
+> exists as a pull-request base. The `-b develop` above is not optional.
+
+## 2.2 Install dependencies
+
+```bash
 npm install
-cp .env.example .env
 ```
 
-Edit `.env`. The minimum is one line:
+Two or three minutes on Cloud Shell's connection.
+
+## 2.3 Deploy
 
 ```bash
-GOOGLE_CLOUD_PROJECT=my-minutes-app
+export GCS_BUCKET=ray-minutes-app-recordings
+export RETAIN_AUDIO_DAYS=30
+
+./deploy.sh ray-minutes-app asia-east2
 ```
 
-Realistically you want four:
+First build is 5–10 minutes; later ones 2–3. Cloud Shell will ask you to
+**authorise** the first `gcloud` call that needs it — click Authorize.
 
-```bash
-GOOGLE_CLOUD_PROJECT=my-minutes-app
-GOOGLE_CLOUD_LOCATION=asia-east2
-GCS_BUCKET=my-minutes-app-recordings
-RETAIN_AUDIO_DAYS=30
-```
+The script does all of this so you don't have to:
 
-`.env` is git-ignored and is only used when running locally. Cloud Run gets its
-configuration separately — see [Step 8](#step-8--deploy).
+1. Enables any APIs still missing
+2. Creates a dedicated service account `minutes-run@…`. **The app runs as this,
+   not as you** — it can call Vertex and touch that one bucket, nothing else.
+3. Grants it `roles/aiplatform.user` and `roles/storage.objectAdmin` on the bucket
+4. Sets a **bucket lifecycle rule** matching `RETAIN_AUDIO_DAYS`, so deleting
+   old recordings is enforced by Cloud Storage rather than by the app
+   remembering to do it
+5. Builds the container and deploys it
+6. Prints your HTTPS URL
+
+Keep that URL. It is unguessable but public — see
+[Locking it down](#locking-it-down).
 
 ---
 
-## Step 6 — Prove it can reach Vertex
+# Part 3 — Prove it works
 
-**Do this before you deploy anything.** It costs a fraction of a cent and turns
-the most likely failures into a message with the fix attached.
+Still in Cloud Shell. **This is the first time any of this code touches Vertex.**
+
+## 3.1 Check the connection
+
+Create a local config so the check knows which project to use:
 
 ```bash
+cat > .env <<'EOF'
+GOOGLE_CLOUD_PROJECT=ray-minutes-app
+GOOGLE_CLOUD_LOCATION=asia-east2
+GCS_BUCKET=ray-minutes-app-recordings
+RETAIN_AUDIO_DAYS=30
+EOF
+
 npm run check
 ```
 
-You should see:
+Expect:
 
 ```
 1. Configuration
-  ✓ project my-minutes-app
+  ✓ project ray-minutes-app
   ✓ region asia-east2
   ✓ model gemini-3.6-flash
   ✓ audio retention 30 days
-  ✓ transcription mode single pass via gs://my-minutes-app-recordings
+  ✓ transcription mode single pass via gs://ray-minutes-app-recordings
 
 2. Credentials
   ✓ access token obtained application default credentials
@@ -176,87 +223,71 @@ You should see:
   ✓ gemini-3.6-flash accepts inline audio
 
 4. Cloud Storage
-  ✓ gs://my-minutes-app-recordings readable and writable
+  ✓ gs://ray-minutes-app-recordings readable and writable
 
 Ready.
 ```
 
-Every failure prints the exact command that fixes it. See
-[Troubleshooting](#troubleshooting) if one is unclear.
+Costs a fraction of a cent. Every failure prints the command that fixes it.
 
----
+> If step 2 fails in Cloud Shell, run `gcloud auth application-default login`
+> and follow the browser flow, then try again.
 
-## Step 7 — Test with a real recording
+**If `gemini-3.6-flash` is not served in your region**, the check says so. Fix
+it without redeploying:
 
-Also before deploying. This is the only thing that tells you whether the
-transcription actually works on *your* meetings, in Cantonese, with your
-colleagues' voices.
+```bash
+gcloud run services update minutes --region asia-east2 \
+  --update-env-vars GOOGLE_CLOUD_LOCATION=us-central1
+```
 
-Record two minutes on your phone's voice memo app with someone else. Both say
+## 3.2 Check the transcription — the one that matters
+
+Everything above proves the plumbing. This proves the *product*: whether the
+model actually holds spoken Cantonese, and whether it maps voices to names.
+
+Record two minutes on your phone's voice memo app with a colleague. Both say
 your names at the start, then talk normally — ideally about something with a
-number and a decision in it. Then:
+number and a decision in it.
+
+Upload it to Cloud Shell: **⋮ menu (top right of the terminal) → Upload → File**.
+It lands in your home directory.
 
 ```bash
-npm run check -- ~/Downloads/test.m4a
+npm run check -- ~/test.m4a
 ```
 
-It prints the transcript with speakers, the name mapping and the evidence behind
-it, drafts real minutes to `preflight-minutes.md`, and checks the failure that
-hides best — whether the model is quietly rewriting spoken Cantonese
-(係 唔係 嘅 咗) into formal 書面語 (是 不是 的 了).
+This prints the transcript with speakers, the name mapping and the evidence
+behind each one, drafts real minutes to `preflight-minutes.md`, and checks the
+failure that hides best — whether the model is quietly rewriting spoken
+Cantonese (係 唔係 嘅 咗) into formal 書面語 (是 不是 的 了).
 
-**Read `preflight-minutes.md` before you deploy.** If the Cantonese is being
-converted, or names are landing on the wrong person, that is a prompt problem
-and no amount of deployment fixes it.
+```bash
+cat preflight-minutes.md
+```
+
+**Read it before you trust the app with a real meeting.** If the Cantonese is
+being converted, or a name landed on the wrong person, that is a prompt problem
+and deploying again will not fix it.
 
 ---
 
-## Step 8 — Deploy
+# Part 4 — Put it on your phone
 
-```bash
-export GCS_BUCKET=my-minutes-app-recordings
-export RETAIN_AUDIO_DAYS=30
-
-./deploy.sh my-minutes-app asia-east2
-```
-
-The first build takes 5–10 minutes; later ones are 2–3. The script:
-
-1. Enables the APIs
-2. Creates a dedicated service account `minutes-run@…` — the app runs as this,
-   not as you, and it can call Vertex and touch that bucket and nothing else
-3. Grants it `roles/aiplatform.user` and `roles/storage.objectAdmin` on the bucket
-4. Sets a **bucket lifecycle rule** matching `RETAIN_AUDIO_DAYS`, so deletion is
-   enforced by Cloud Storage rather than by the app remembering to run
-5. Builds the container and deploys it
-6. Prints your HTTPS URL
-
-Keep that URL. It is unguessable but public — see [Locking it down](#locking-it-down).
-
----
-
-## Step 9 — Put it on your phone
-
-Open the URL in the phone's browser and add it to the home screen:
+Open the URL from 2.3 in the phone's browser and add it to the home screen:
 
 - **iPhone:** Share → Add to Home Screen. Must be Safari.
 - **Android:** menu → Install app / Add to Home screen.
 
-Running from the home screen matters — it stops the browser chrome stealing taps
-mid-meeting.
+Running from the home screen stops browser chrome stealing taps mid-meeting.
 
 **iPhone, before a long meeting:** Settings → Display & Brightness → Auto-Lock →
 Never. The app takes a wake lock where Safari supports it, but if the screen
-locks the audio context suspends and recording stops.
+locks, iOS suspends the audio context and recording stops.
 
----
+**First meeting — use a low-stakes one:**
 
-## Step 10 — First meeting
-
-Use a low-stakes one. Then:
-
-- Fill in the attendee list on the setup screen. It is the single biggest
-  accuracy win available.
+- Fill in the attendee list on the setup screen. Biggest accuracy win available.
 - Phone flat in the middle of the table, screen up.
 - Watch the live transcript for the first minute. If the person at the far end
   never appears, move the phone — that is the entire reason that screen exists.
@@ -264,34 +295,60 @@ Use a low-stakes one. Then:
 
 ---
 
-## Environment variables
+# Part 5 — Deploy automatically on every push
 
-Set on Cloud Run by `deploy.sh` via `--set-env-vars`, and locally by `.env`.
-**None of these are secret.**
+Optional. After this, pushing to `develop` redeploys with no terminal at all.
+
+```bash
+gcloud builds triggers create github \
+  --name=minutes-deploy \
+  --repo-name=minutes \
+  --repo-owner=raymondpun \
+  --branch-pattern='^develop$' \
+  --build-config=cloudbuild.yaml \
+  --region=asia-east2
+```
+
+You will be sent to the console once to **connect the GitHub repository** and
+install the Cloud Build GitHub App. The repo needs a `cloudbuild.yaml` — not
+present yet; ask and I'll add one.
+
+Until then, updating is Part 2 again:
+
+```bash
+cd ~/minutes && git pull
+export GCS_BUCKET=ray-minutes-app-recordings
+./deploy.sh ray-minutes-app asia-east2
+```
+
+---
+
+# Environment variables
+
+Set on Cloud Run by `deploy.sh` via `--set-env-vars`. **None are secret.**
 
 | Variable | Default | What it does |
 | --- | --- | --- |
 | `GOOGLE_CLOUD_PROJECT` | *required* | Which project to bill and call |
 | `GOOGLE_CLOUD_LOCATION` | `asia-southeast1` | Vertex region |
 | `GCS_BUCKET` | *unset* | Single-pass transcription, durable history, audio retention |
-| `RETAIN_AUDIO_DAYS` | `30` | `0` = delete at draft, `N` = N days, `forever` = keep and tier to colder storage |
+| `RETAIN_AUDIO_DAYS` | `30` | `0` = delete at draft · `N` = N days · `forever` = keep, tiered to colder storage |
 | `MODEL_TRANSCRIBE` | `gemini-3.6-flash` | The authoritative transcript |
 | `MODEL_MINUTES` | `gemini-3.6-flash` | Drafting the minutes |
-| `MODEL_LIVE` | `gemini-3.6-flash` | Live transcript. `gemini-3.5-flash-lite` cuts the live pass ~4x |
+| `MODEL_LIVE` | `gemini-3.6-flash` | Live transcript. `gemini-3.5-flash-lite` cuts that pass ~4x |
 | `MODEL_DIGEST` | `gemini-3.6-flash` | The rolling summary |
 | `LIVE_STEADY_CHUNK_SECONDS` | `60` | Live batching after the mic-check window |
 | `DIGEST_INTERVAL_SECONDS` | `300` | How often a summary block is written |
 | `ROLL_CALL_MAX_SECONDS` | `240` | Give up waiting for introductions to end |
 
-To change one without redeploying:
+Change one without redeploying:
 
 ```bash
-gcloud run services update minutes \
-  --region asia-east2 \
+gcloud run services update minutes --region asia-east2 \
   --update-env-vars RETAIN_AUDIO_DAYS=0
 ```
 
-To see what is currently set:
+See what is currently set:
 
 ```bash
 gcloud run services describe minutes --region asia-east2 \
@@ -300,131 +357,121 @@ gcloud run services describe minutes --region asia-east2 \
 
 ---
 
-## Secrets
+# Secrets
 
 **This app has none, by design.**
 
 Vertex AI does not use API keys. It uses **Application Default Credentials**,
-which means identity comes from the environment rather than from a string you
-paste somewhere:
+so identity comes from the environment rather than a string you paste:
 
-- **On your machine:** `gcloud auth application-default login` writes a
-  credential to `~/.config/gcloud/`. Nothing goes in `.env`.
-- **On Cloud Run:** the service runs as the `minutes-run@…` service account that
-  `deploy.sh` created. Google injects a token automatically. Nothing is stored.
+- **In Cloud Shell:** your own Google login, already present.
+- **On Cloud Run:** the `minutes-run@…` service account `deploy.sh` created.
+  Google injects a token automatically. Nothing is stored anywhere.
 
-So there is no key to rotate, no key to leak in a screenshot, and nothing in
-this repo would be dangerous if it were public. `.env` holds a project ID, a
-region and a bucket name.
+There is no key to rotate, none to leak in a screenshot, and nothing in this
+repo would be dangerous if it were public. `.env` holds a project ID, a region,
+a bucket name and a number.
 
 ### If you ever do add a real secret
 
-Say you add an integration that needs a token. Do **not** put it in
-`--set-env-vars`, which is visible to anyone with read access to the service.
-Use Secret Manager:
+Say you add an integration needing a token. Do **not** put it in
+`--set-env-vars`, which is readable by anyone with access to the service.
 
 ```bash
 # Store it
 echo -n "the-actual-secret" | gcloud secrets create my-integration-token \
-  --data-file=- --project my-minutes-app
+  --data-file=-
 
 # Let the app read it
 gcloud secrets add-iam-policy-binding my-integration-token \
-  --member="serviceAccount:minutes-run@my-minutes-app.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor" \
-  --project my-minutes-app
+  --member="serviceAccount:minutes-run@ray-minutes-app.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
 
-# Mount it as an env var at deploy time
+# Mount it as an env var
 gcloud run services update minutes --region asia-east2 \
   --set-secrets MY_INTEGRATION_TOKEN=my-integration-token:latest
 ```
 
-It then appears as `process.env.MY_INTEGRATION_TOKEN` and never touches the repo
-or the service config.
+It appears as `process.env.MY_INTEGRATION_TOKEN` and never touches the repo or
+the service config.
 
 ---
 
-## Locking it down
+# Locking it down
 
-`deploy.sh` uses `--allow-unauthenticated`, which means **anyone with the URL can
-open the app**. The URL is long and unguessable, so this is not an emergency —
-but it is not access control either, and this app holds recordings of your
-colleagues.
-
-Options, roughly in order of effort:
+`deploy.sh` uses `--allow-unauthenticated`, so **anyone with the URL can open the
+app**. The URL is long and unguessable, so this is not an emergency — but it is
+not access control either, and this app holds recordings of your colleagues.
 
 1. **Leave it.** Reasonable if you treat the URL as a password and the meetings
    are low sensitivity.
-2. **Identity-Aware Proxy** in front of the service, restricted to your Google
-   account or Workspace domain. This is the proper answer. It is more setup than
-   fits here — see
+2. **Identity-Aware Proxy**, restricted to your Google account or Workspace
+   domain. The proper answer —
    [Cloud Run IAP](https://cloud.google.com/iap/docs/enabling-cloud-run).
-   Caveat worth knowing before you start: IAP authenticates browser requests,
-   and **WebSockets behind IAP need checking** — this app streams audio over
-   one, so test a real recording immediately after enabling it.
-3. **An access code in the app.** Simplest thing that actually gates it for a
-   single user. Not built — ask if you want it.
+   **Test a real recording immediately after enabling it:** IAP authenticates
+   browser requests, and this app streams audio over a long-lived WebSocket.
+   That combination needs verifying, and I have not been able to verify it.
+3. **An access code in the app.** Simplest thing that genuinely gates it for one
+   user. Not built — ask if you want it.
 
-Whatever you choose, the bucket is already private: `--uniform-bucket-level-access`
-means only the service account can read the recordings.
+The bucket is already private either way: `--uniform-bucket-level-access` means
+only the service account can read the recordings.
 
 ---
 
-## Updating
+# Updating and rolling back
 
 ```bash
-git pull
-export GCS_BUCKET=my-minutes-app-recordings
-./deploy.sh my-minutes-app asia-east2
+cd ~/minutes && git pull
+export GCS_BUCKET=ray-minutes-app-recordings
+./deploy.sh ray-minutes-app asia-east2
 ```
 
-Cloud Run keeps every revision. To roll back:
+Cloud Run keeps every revision:
 
 ```bash
 gcloud run revisions list --service minutes --region asia-east2
 
-gcloud run services update-traffic minutes \
-  --region asia-east2 \
+gcloud run services update-traffic minutes --region asia-east2 \
   --to-revisions minutes-00007-abc=100
 ```
 
 ---
 
-## Watching the cost
+# Watching the cost
 
-```bash
-# What has been spent
-gcloud billing accounts list
-```
+Expect **~US$1.45 of Vertex per two-hour meeting**. Cloud Run scales to zero, so
+it costs nothing while idle. Storage is about half a cent per retained meeting
+per month.
 
-Then [console.cloud.google.com/billing](https://console.cloud.google.com/billing)
-→ Reports → filter by service. Expect Vertex AI to dominate and Cloud Run to be
-near zero.
+[console.cloud.google.com/billing](https://console.cloud.google.com/billing) →
+Reports → filter by project.
 
-**Set a budget alert** — it takes two minutes and it is the difference between
-noticing a runaway loop today or next month:
-
-Billing → Budgets & alerts → Create budget → scope to this project → set an
-amount → alert at 50%, 90%, 100%.
+**Set a budget alert.** Two minutes, and it's the difference between noticing a
+runaway loop today or next month: Billing → Budgets & alerts → Create budget →
+scope to this project → alert at 50%, 90%, 100%.
 
 ---
 
-## Troubleshooting
+# Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `npm run check` — "Could not load the default credentials" | Step 2 skipped | `gcloud auth application-default login` |
-| "PERMISSION_DENIED" on a Vertex call | API off, or the account lacks the role | `gcloud services enable aiplatform.googleapis.com`; grant `roles/aiplatform.user` |
-| "Publisher Model … not found" | The model is not served in your region | Try `GOOGLE_CLOUD_LOCATION=us-central1`, or set `MODEL_*` to a model your region has |
-| "billing" in the error text | Billing not linked | Link it, then wait a minute |
-| Build fails on `gcloud run deploy` | Cloud Build API off | `gcloud services enable cloudbuild.googleapis.com` |
+| Project missing from `gcloud projects list` | The list index lags | `gcloud projects describe <id>` — if ACTIVE, carry on |
+| "lacks an 'environment' tag" | Advisory org nudge | Ignore |
+| `PERMISSION_DENIED` on any Vertex call | Billing not linked, or API off | `gcloud billing projects describe <id>` must say `billingEnabled: true` |
+| "Could not load the default credentials" | ADC missing | `gcloud auth application-default login` |
+| "Publisher Model … not found" | Model not served in that region | `--update-env-vars GOOGLE_CLOUD_LOCATION=us-central1` |
+| Build fails immediately | Cloud Build or Artifact Registry API off | `gcloud services enable cloudbuild.googleapis.com artifactregistry.googleapis.com` |
+| `git clone` asks for a password and rejects it | GitHub wants a token, not a password | `gh auth login`, or use a PAT |
+| Cloned repo looks empty | You are on `main`, which is an empty commit | `git checkout develop` |
 | Microphone button does nothing on the phone | Not a secure context | Use the `https://…run.app` URL, never an IP |
-| iPhone stops recording partway | Screen locked | Auto-Lock → Never; do not switch apps |
-| Status pill flicks to "Reconnecting" around 60 min | Cloud Run caps a request at 60 min and a WebSocket is one request | Expected. Audio is buffered across it and nothing is lost |
-| Meeting stuck on "Transcribing" | Instance was reclaimed while the phone was locked | Reopen the meeting — it restarts and reads the recording back from the bucket |
-| Past meetings vanished | No `GCS_BUCKET`, and the instance recycled | Set a bucket and redeploy. Nothing recovers what is already gone |
-| Minutes name people "Speaker 2" | Nobody was identified | Check the roll call happened, and fill in the attendee list next time |
-| Cantonese comes out as 是/不是/的 | The model drifted to 書面語 | Re-run `npm run check -- recording.m4a` to confirm, then strengthen rule 1 in `server/src/prompts.ts` |
+| iPhone stops recording partway | Screen locked | Auto-Lock → Never; don't switch apps |
+| Status pill flicks to "Reconnecting" near 60 min | Cloud Run caps a request at 60 min; a WebSocket is one request | Expected. Audio buffers across it, nothing is lost |
+| Meeting stuck on "Transcribing" | Instance reclaimed while the phone was locked | Reopen the meeting — it restarts and reads the recording back from the bucket |
+| Past meetings vanished | No `GCS_BUCKET`, instance recycled | Set a bucket and redeploy. Nothing recovers what is already gone |
+| Minutes name people "Speaker 2" | Nobody was identified | Check the roll call happened; fill in the attendee list next time |
+| Cantonese comes out as 是/不是/的 | Model drifted to 書面語 | Confirm with `npm run check -- recording.m4a`, then strengthen rule 1 in `server/src/prompts.ts` |
 
 Logs:
 
@@ -434,20 +481,20 @@ gcloud run services logs read minutes --region asia-east2 --limit 100
 
 ---
 
-## Tearing it down
+# Tearing it down
 
 ```bash
 gcloud run services delete minutes --region asia-east2
 
 # Deletes every recording, transcript and set of minutes. Irreversible.
-gcloud storage rm -r gs://my-minutes-app-recordings
+gcloud storage rm -r gs://ray-minutes-app-recordings
 
 gcloud iam service-accounts delete \
-  minutes-run@my-minutes-app.iam.gserviceaccount.com
+  minutes-run@ray-minutes-app.iam.gserviceaccount.com
 ```
 
-Or delete the whole project, which stops all billing:
+Or delete the project, which stops all billing:
 
 ```bash
-gcloud projects delete my-minutes-app
+gcloud projects delete ray-minutes-app
 ```
