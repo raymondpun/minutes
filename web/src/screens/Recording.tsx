@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { LiveLine, MeetingMeta } from '../types';
 
 interface Props {
@@ -15,6 +15,8 @@ interface Props {
   onStop: () => void;
 }
 
+const BARS = 32;
+
 export default function Recording({
   meta,
   elapsed,
@@ -30,9 +32,15 @@ export default function Recording({
 }: Props) {
   const feedRef = useRef<HTMLDivElement>(null);
   const pinnedToBottom = useRef(true);
+  const [history, setHistory] = useState<number[]>(() => new Array(BARS).fill(0));
 
-  // Follow the transcript unless the user has scrolled up to read something --
-  // yanking them back to the bottom mid-sentence is infuriating.
+  // A scrolling bar array, not a single fill. A flat bar at low level looks
+  // identical to a broken one, and "is it hearing us?" is the only question
+  // this screen exists to answer.
+  useEffect(() => {
+    setHistory((prev) => [...prev.slice(1), level]);
+  }, [level]);
+
   useEffect(() => {
     const el = feedRef.current;
     if (el && pinnedToBottom.current) el.scrollTop = el.scrollHeight;
@@ -41,42 +49,44 @@ export default function Recording({
   const onScroll = () => {
     const el = feedRef.current;
     if (!el) return;
-    pinnedToBottom.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    pinnedToBottom.current = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
   };
 
-  // Nothing above the noise floor for a while means the mic is muted, covered,
-  // or pointed at nobody. Worth saying out loud before the meeting is over.
-  const quiet = elapsed > 25 && level < 0.02;
+  const quiet = elapsed > 25 && history.every((v) => v < 0.02);
 
   return (
     <div className="recording">
-      <div className="timer">{formatElapsed(elapsed)}</div>
-      <div className="timer-label">
-        {meta.title} · recording
+      <div className="timer-block">
+        <div className="timer">{formatElapsed(elapsed)}</div>
+        <div className="timer-label">
+          <span className="rec-dot" aria-hidden />
+          {meta.title}
+        </div>
       </div>
 
-      <div className="meter" aria-hidden>
-        <div className="meter-fill" style={{ width: `${Math.round(level * 100)}%` }} />
-      </div>
-      <div className={`meter-note${quiet ? ' bad' : ''}`}>
-        {quiet
-          ? 'Hearing almost nothing — check the mic is not covered'
-          : deviceLabel}
+      <div>
+        <div className="vu" role="img" aria-label={`Input level ${Math.round(level * 100)}%`}>
+          {history.map((value, i) => (
+            <div
+              key={i}
+              className={`vu-bar${value > 0.55 ? ' hot' : value > 0.03 ? ' on' : ''}`}
+              style={{ height: `${Math.max(4, Math.round(value * 48))}px` }}
+            />
+          ))}
+        </div>
+        <div className={`meter-note${quiet ? ' bad' : ''}`}>
+          {quiet ? 'Hearing almost nothing — check the mic is not covered' : deviceLabel}
+        </div>
       </div>
 
       <div className="status-strip">
-        <span className={`pill ${connected ? 'live' : 'offline'}`}>
-          {connected ? '● Uploading' : '● Reconnecting'}
+        <span className={`pill ${connected ? 'good' : 'warn'}`}>
+          {connected ? 'Uploading' : 'Reconnecting'}
         </span>
         {pendingBytes > 64_000 && (
-          <span className="pill offline">
-            {formatBacklog(pendingBytes)} buffered
-          </span>
+          <span className="pill warn">{formatBacklog(pendingBytes)} buffered</span>
         )}
-        {!wakeLockHeld && (
-          <span className="pill offline">Screen may sleep</span>
-        )}
+        {!wakeLockHeld && <span className="pill warn">Screen may sleep</span>}
       </div>
 
       {!wakeLockHeld && (
@@ -84,36 +94,29 @@ export default function Recording({
           {wakeLockSupported
             ? 'Could not keep the screen awake.'
             : 'This browser cannot keep the screen awake.'}{' '}
-          <strong>
-            Turn off auto-lock in Settings, or keep tapping the screen.
-          </strong>{' '}
-          If the phone locks, recording stops.
+          Turn off auto-lock — <strong>if the phone locks, recording stops.</strong>
         </div>
       )}
 
       {!connected && (
         <div className="banner warn">
-          Lost the connection. Audio is being buffered and will upload when it
-          comes back — keep recording.
+          Connection lost. Audio is buffering and will upload when it returns —
+          keep recording.
         </div>
       )}
 
       <div className="live-feed" ref={feedRef} onScroll={onScroll}>
         {liveLines.length === 0 ? (
-          <div className="empty">
-            Live transcript appears here every 20 seconds.
-            <br />
-            <br />
-            It is rough on purpose — use it to check everyone is being picked up.
-            The accurate transcript is produced from the full recording when you
-            stop.
-          </div>
+          <p className="feed-empty">
+            Live transcript appears here every 20 seconds. It is rough on purpose
+            — use it to check everyone is being picked up.
+          </p>
         ) : (
           liveLines.map((line, i) => (
-            <div className="live-line" key={`${line.start}-${i}`}>
+            <p className="live-line" key={`${line.start}-${i}`}>
               <span className="live-time">{formatElapsed(line.start)}</span>
               {line.text}
-            </div>
+            </p>
           ))
         )}
       </div>

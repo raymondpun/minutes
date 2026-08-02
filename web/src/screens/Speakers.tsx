@@ -13,9 +13,8 @@ interface Props {
  * The one human checkpoint in the pipeline.
  *
  * A name attached to the wrong resolution is the worst thing this app can
- * produce -- worse than a missing item, because it is wrong with confidence and
- * ends up in a document of record. Ten seconds of checking here removes that
- * whole class of error, so it is not skippable.
+ * produce -- wrong with confidence, in a document of record. Ten seconds of
+ * checking removes that whole class of error, so it is not skippable.
  */
 export default function Speakers({
   speakers,
@@ -35,41 +34,44 @@ export default function Speakers({
   const unnamed = edited.filter((s) => !s.name?.trim()).length;
 
   return (
-    <div>
-      <h1>Who was speaking?</h1>
+    <>
+      <div>
+        <p className="eyebrow">Step 1 of 2 · before drafting</p>
+        <h1>Who was speaking?</h1>
+      </div>
       <p className="sub">
-        Names were matched from the introductions at the start. Correct anything
-        wrong — these names go straight into the minutes.
+        Matched from the introductions at the start. Correct anything wrong —
+        these names go straight into the minutes.
       </p>
 
       {unnamed > 0 && (
         <div className="banner warn">
           {unnamed === 1 ? '1 speaker was' : `${unnamed} speakers were`} never
           identified. Leave blank if you do not know — they will appear as “an
-          unidentified attendee” and be flagged for you to fill in, which is
-          safer than a guess.
+          unidentified attendee” and be flagged, which is safer than a guess.
         </div>
       )}
 
-      {edited.map((speaker) => {
-        const sample = transcript.find((s) => s.speaker === speaker.speakerId);
-        return (
+      <div className="stack">
+        {edited.map((speaker) => (
           <div className="speaker-card" key={speaker.speakerId}>
             <div className="speaker-head">
               <span className="speaker-id">{speaker.speakerId}</span>
               <span className={`badge ${speaker.confidence}`}>
-                {speaker.name
-                  ? `${speaker.confidence} confidence`
-                  : 'not identified'}
+                {speaker.name ? speaker.confidence : 'not identified'}
               </span>
             </div>
 
-            {speaker.evidence && (
+            {speaker.evidence ? (
               <p className="evidence">
                 {speaker.evidenceTime != null && (
-                  <strong>{formatTime(speaker.evidenceTime)} </strong>
+                  <span className="t">{formatTime(speaker.evidenceTime)}</span>
                 )}
                 “{speaker.evidence}”
+              </p>
+            ) : (
+              <p className="hint">
+                Never said their own name and was never addressed by name.
               </p>
             )}
 
@@ -80,16 +82,20 @@ export default function Speakers({
               list={expectedAttendees.length ? 'expected-attendees' : undefined}
               autoComplete="off"
               autoCapitalize="words"
+              aria-label={`Name for ${speaker.speakerId}`}
             />
 
             <p className="hint">
               {speaker.segmentCount} contribution
               {speaker.segmentCount === 1 ? '' : 's'}
-              {sample ? ` · first heard: “${truncate(sample.text, 70)}”` : ''}
+              {(() => {
+                const sample = transcript.find((s) => s.speaker === speaker.speakerId);
+                return sample ? ` · first heard: “${truncate(sample.text, 62)}”` : '';
+              })()}
             </p>
           </div>
-        );
-      })}
+        ))}
+      </div>
 
       {expectedAttendees.length > 0 && (
         <datalist id="expected-attendees">
@@ -99,14 +105,10 @@ export default function Speakers({
         </datalist>
       )}
 
-      <button
-        className="btn-primary"
-        onClick={() => onConfirm(edited)}
-        disabled={busy}
-      >
+      <button className="btn-primary" onClick={() => onConfirm(edited)} disabled={busy}>
         {busy ? 'Drafting…' : 'Draft the minutes'}
       </button>
-    </div>
+    </>
   );
 }
 

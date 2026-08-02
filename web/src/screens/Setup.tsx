@@ -8,10 +8,9 @@ interface Props {
 }
 
 /**
- * Filled in before the meeting starts, in the thirty seconds while people are
- * sitting down. Everything here is optional except the title -- a form that
- * blocks you from recording is a form that makes you miss the first five
- * minutes.
+ * Filled in while people are sitting down. Everything is optional except the
+ * title -- a form that blocks you from recording is a form that makes you miss
+ * the first five minutes.
  */
 export default function Setup({ onStart, onCancel, busy }: Props) {
   const [title, setTitle] = useState('');
@@ -37,34 +36,41 @@ export default function Setup({ onStart, onCancel, busy }: Props) {
   };
 
   return (
-    <div>
-      <h1>New meeting</h1>
+    <>
+      <div>
+        <p className="eyebrow">Before you start</p>
+        <h1>New meeting</h1>
+      </div>
       <p className="sub">
-        All optional except the title. You can start recording and fix the rest later.
+        Only the title is required. You can start recording and fix the rest later.
       </p>
 
       <div className="card">
-        <label htmlFor="title">Meeting title</label>
-        <input
-          id="title"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-          placeholder="Q3 Board Meeting"
-          autoComplete="off"
-        />
+        <div className="field">
+          <label htmlFor="title">Meeting title</label>
+          <input
+            id="title"
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Q3 Board Meeting"
+            autoComplete="off"
+          />
+        </div>
 
-        <label htmlFor="body">Body</label>
-        <input
-          id="body"
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Board of Directors"
-          autoComplete="off"
-        />
-        <p className="hint">Appears as the heading of the minutes.</p>
+        <div className="field">
+          <label htmlFor="body">Body</label>
+          <input
+            id="body"
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Board of Directors"
+            autoComplete="off"
+          />
+          <p className="hint">Appears as the heading of the minutes.</p>
+        </div>
 
         <div className="row">
-          <div>
+          <div className="field">
             <label htmlFor="date">Date</label>
             <input
               id="date"
@@ -73,7 +79,7 @@ export default function Setup({ onStart, onCancel, busy }: Props) {
               onChange={(e) => setDate(e.target.value)}
             />
           </div>
-          <div>
+          <div className="field">
             <label htmlFor="chair">Chair</label>
             <input
               id="chair"
@@ -85,52 +91,60 @@ export default function Setup({ onStart, onCancel, busy }: Props) {
           </div>
         </div>
 
-        <label htmlFor="location">Location</label>
-        <input
-          id="location"
-          value={location}
-          onChange={(e) => setLocation(e.target.value)}
-          placeholder="Boardroom, 28/F"
-          autoComplete="off"
-        />
+        <div className="field">
+          <label htmlFor="location">Location</label>
+          <input
+            id="location"
+            value={location}
+            onChange={(e) => setLocation(e.target.value)}
+            placeholder="Boardroom, 28/F"
+            autoComplete="off"
+          />
+        </div>
       </div>
 
       <div className="card">
-        <label htmlFor="attendees">Expected attendees</label>
-        <textarea
-          id="attendees"
-          value={attendees}
-          onChange={(e) => setAttendees(e.target.value)}
-          placeholder={'Raymond Pun\nCheryl Lau\n陳大文'}
-        />
-        <p className="hint">
-          One per line. This is the single biggest accuracy win available: with a
-          name list, matching voices to people becomes a matching problem instead
-          of a guessing problem, and the spelling in the minutes will be right.
-        </p>
+        <div className="field">
+          <label htmlFor="attendees">Expected attendees</label>
+          <textarea
+            id="attendees"
+            value={attendees}
+            onChange={(e) => setAttendees(e.target.value)}
+            placeholder={'Raymond Pun\nCheryl Lau\n陳大文'}
+          />
+          <p className="hint">
+            One per line. The biggest accuracy win available: with a name list,
+            matching voices to people becomes a matching problem instead of a
+            guessing one, and the spelling in the minutes comes out right.
+          </p>
+        </div>
 
-        <label htmlFor="apologies">Apologies for absence</label>
-        <textarea
-          id="apologies"
-          value={apologies}
-          onChange={(e) => setApologies(e.target.value)}
-          placeholder="One per line"
-        />
+        <div className="field">
+          <label htmlFor="apologies">Apologies for absence</label>
+          <textarea
+            id="apologies"
+            value={apologies}
+            onChange={(e) => setApologies(e.target.value)}
+            placeholder="One per line"
+          />
+        </div>
       </div>
 
       <div className="card">
-        <label htmlFor="agenda">Agenda</label>
-        <textarea
-          id="agenda"
-          value={agenda}
-          onChange={(e) => setAgenda(e.target.value)}
-          placeholder={'Apologies\nMinutes of the previous meeting\nQ3 financials\nAOB'}
-          style={{ minHeight: 110 }}
-        />
-        <p className="hint">
-          One item per line. The minutes are structured around this where the
-          discussion matches, with extra items added for anything raised off-agenda.
-        </p>
+        <div className="field">
+          <label htmlFor="agenda">Agenda</label>
+          <textarea
+            id="agenda"
+            value={agenda}
+            onChange={(e) => setAgenda(e.target.value)}
+            placeholder={'Apologies\nMinutes of the previous meeting\nQ3 financials\nAOB'}
+            style={{ minHeight: 116 }}
+          />
+          <p className="hint">
+            One item per line. The minutes are structured around this, with extra
+            items added for anything raised off-agenda.
+          </p>
+        </div>
       </div>
 
       <div className="stack">
@@ -141,7 +155,7 @@ export default function Setup({ onStart, onCancel, busy }: Props) {
           Cancel
         </button>
       </div>
-    </div>
+    </>
   );
 }
 

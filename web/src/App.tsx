@@ -316,11 +316,18 @@ function Home({
   onNew: () => void;
   onOpen: (id: string) => void;
 }) {
+  const needsAttention = meetings.filter(
+    (m) => m.status === 'awaiting_speakers',
+  ).length;
+
   return (
-    <div>
-      <h1>Minutes</h1>
+    <>
+      <div>
+        <p className="eyebrow">In-person · Cantonese &amp; English</p>
+        <h1>Minutes</h1>
+      </div>
       <p className="sub">
-        Records an in-person meeting and drafts the formal minutes from it.
+        Records the meeting and drafts the formal minutes from it.
       </p>
 
       {error && <div className="banner error">{error}</div>}
@@ -329,20 +336,30 @@ function Home({
         Start a meeting
       </button>
 
-      {meetings.length > 0 && (
-        <>
-          <h2>Past meetings</h2>
+      <div className="section">
+        <h2>
+          Past meetings
+          {needsAttention > 0 && (
+            <span className="badge medium" style={{ marginLeft: 8 }}>
+              {needsAttention} need{needsAttention === 1 ? 's' : ''} you
+            </span>
+          )}
+        </h2>
+
+        {meetings.length === 0 ? (
+          <p className="empty-state">
+            No meetings yet.
+            <br />
+            Put the phone flat in the middle of the table before you start.
+          </p>
+        ) : (
           <div className="stack">
             {meetings.map((m) => (
-              <button
-                className="meeting-item"
-                key={m.id}
-                onClick={() => onOpen(m.id)}
-              >
+              <button className="meeting-item" key={m.id} onClick={() => onOpen(m.id)}>
                 <span>
-                  {m.title}
+                  <strong>{m.title}</strong>
                   <div className="meta">
-                    {m.date}
+                    {formatShortDate(m.date)}
                     {m.durationSeconds
                       ? ` · ${Math.round(m.durationSeconds / 60)} min`
                       : ''}
@@ -354,14 +371,14 @@ function Home({
               </button>
             ))}
           </div>
-        </>
-      )}
+        )}
+      </div>
 
       <p className="footer-note">
         Audio is processed by Gemini on Vertex AI in your own Google Cloud
         project, and deleted once the minutes are drafted.
       </p>
-    </div>
+    </>
   );
 }
 
@@ -391,8 +408,11 @@ function Review({
 
   if (meta.status === 'failed') {
     return (
-      <div>
-        <h1>Something went wrong</h1>
+      <>
+        <div>
+          <p className="eyebrow">{meta.title}</p>
+          <h1>Something went wrong</h1>
+        </div>
         <div className="banner error">{meta.error ?? 'Unknown error'}</div>
         <p className="sub">
           {snapshot.audioAvailable
@@ -402,7 +422,7 @@ function Review({
         <button className="btn-ghost" onClick={onNew}>
           Back
         </button>
-      </div>
+      </>
     );
   }
 
@@ -436,14 +456,18 @@ function Review({
   return (
     <div className="center">
       <div className="spinner" />
-      <h1>{statusLabel(meta.status)}</h1>
-      <p className="sub">{meta.progress ?? 'Working…'}</p>
-      <p className="hint">
+      <div>
+        <p className="eyebrow">{meta.title}</p>
+        <h1>{statusLabel(meta.status)}</h1>
+      </div>
+      <p className="sub" style={{ textAlign: 'center' }}>
+        {meta.progress ?? 'Working…'}
+      </p>
+      <p className="hint" style={{ textAlign: 'center' }}>
         {meta.durationSeconds
           ? `${Math.round(meta.durationSeconds / 60)} minutes of audio. `
           : ''}
-        This takes a few minutes. You can lock the phone — it keeps running on
-        the server.
+        You can lock the phone — this keeps running on the server.
       </p>
     </div>
   );
@@ -477,6 +501,16 @@ function statusTone(status: MeetingMeta['status']): string {
   if (status === 'failed') return 'low';
   if (status === 'awaiting_speakers') return 'medium';
   return '';
+}
+
+function formatShortDate(iso: string): string {
+  const d = new Date(`${iso}T00:00:00`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 }
 
 function message(err: unknown): string {

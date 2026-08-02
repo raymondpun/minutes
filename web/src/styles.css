@@ -1,17 +1,121 @@
+/*
+ * Two type systems on purpose.
+ *
+ * The app chrome is a tool -- system sans, scanned and operated. The minutes
+ * are a document of record -- serif, read. Georgia leads the serif stack for
+ * Latin and falls through to Songti TC for Chinese, so 陳大文 sets in 明體 the
+ * way a formal Hong Kong document actually would, rather than in the same sans
+ * as the buttons.
+ *
+ * No webfonts: this runs on a phone in a meeting room with unreliable wifi, and
+ * a font that fails to load mid-meeting is worse than one that was never there.
+ */
+
 :root {
-  --bg: #0f1115;
-  --surface: #171a21;
-  --surface-2: #1f232c;
-  --border: #2a2f3a;
-  --text: #e7e9ee;
-  --muted: #9aa3b5;
-  --faint: #6b7385;
-  --accent: #e8735a;
-  --accent-dim: #7c3a2c;
-  --good: #4ea87a;
-  --warn: #d9a441;
-  --bad: #d9534f;
-  --radius: 14px;
+  color-scheme: light dark;
+
+  --font-ui: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang HK',
+    'Noto Sans HK', 'Microsoft JhengHei', Roboto, sans-serif;
+  --font-doc: Georgia, 'Songti TC', 'Songti SC', 'Source Han Serif HC',
+    'Noto Serif HK', ui-serif, 'Times New Roman', serif;
+  --font-data: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  /* Light: warm paper. Neutrals carry a yellow bias so they read as chosen
+     rather than as an untouched grey. */
+  --ground: #f6f3ec;
+  --surface: #fffdf8;
+  --surface-2: #ece7dc;
+  --rule: #dcd4c5;
+  --rule-strong: #c4b9a5;
+  --ink: #1b1915;
+  --ink-soft: #58524a;
+  --ink-faint: #8b8477;
+
+  /* Seal red -- the company chop. Reserved for the primary action and for the
+     marks that carry authority in the document. */
+  --seal: #a3322a;
+  --seal-ink: #fffdf8;
+  --seal-wash: #f3e3df;
+
+  /* Semantic, deliberately not the accent. */
+  --brass: #7d5a15;
+  --brass-wash: #f5ecd6;
+  --jade: #2c6650;
+  --jade-wash: #dfeee7;
+  --alarm: #9c2f27;
+
+  --focus: #2f5d8a;
+
+  --radius: 10px;
+  --radius-lg: 16px;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    /* Dark: cool ink ground, warm off-white text. The slight temperature
+       tension keeps it from looking like a default near-black. */
+    --ground: #131519;
+    --surface: #1a1d23;
+    --surface-2: #22262e;
+    --rule: #30353f;
+    --rule-strong: #454c59;
+    --ink: #eae6dd;
+    --ink-soft: #a5aab5;
+    --ink-faint: #737a87;
+
+    --seal: #d4584a;
+    --seal-ink: #1a0f0d;
+    --seal-wash: #2c1a17;
+
+    --brass: #d0a052;
+    --brass-wash: #2a2317;
+    --jade: #5fa886;
+    --jade-wash: #16261f;
+    --alarm: #e0685c;
+
+    --focus: #6fa8dc;
+  }
+}
+
+/* The document-level toggle must beat the media query in both directions. */
+:root[data-theme='light'] {
+  --ground: #f6f3ec;
+  --surface: #fffdf8;
+  --surface-2: #ece7dc;
+  --rule: #dcd4c5;
+  --rule-strong: #c4b9a5;
+  --ink: #1b1915;
+  --ink-soft: #58524a;
+  --ink-faint: #8b8477;
+  --seal: #a3322a;
+  --seal-ink: #fffdf8;
+  --seal-wash: #f3e3df;
+  --brass: #7d5a15;
+  --brass-wash: #f5ecd6;
+  --jade: #2c6650;
+  --jade-wash: #dfeee7;
+  --alarm: #9c2f27;
+  --focus: #2f5d8a;
+}
+
+:root[data-theme='dark'] {
+  --ground: #131519;
+  --surface: #1a1d23;
+  --surface-2: #22262e;
+  --rule: #30353f;
+  --rule-strong: #454c59;
+  --ink: #eae6dd;
+  --ink-soft: #a5aab5;
+  --ink-faint: #737a87;
+  --seal: #d4584a;
+  --seal-ink: #1a0f0d;
+  --seal-wash: #2c1a17;
+  --brass: #d0a052;
+  --brass-wash: #2a2317;
+  --jade: #5fa886;
+  --jade-wash: #16261f;
+  --alarm: #e0685c;
+  --focus: #6fa8dc;
 }
 
 * {
@@ -27,99 +131,90 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
-  color: var(--text);
-  font: 16px/1.55 -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Noto Sans HK',
-    'PingFang HK', 'Microsoft JhengHei', Roboto, sans-serif;
-  /* Stop iOS from rubber-banding the whole page while recording. */
+  background: var(--ground);
+  color: var(--ink);
+  font: 16px/1.55 var(--font-ui);
   overscroll-behavior-y: none;
+  -webkit-font-smoothing: antialiased;
 }
 
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ------------------------------------------------------------- shell ----- */
+
 .app {
-  max-width: 720px;
+  max-width: 680px;
   margin: 0 auto;
-  padding: max(16px, env(safe-area-inset-top)) 16px
-    calc(24px + env(safe-area-inset-bottom));
+  padding: max(20px, env(safe-area-inset-top)) 18px
+    calc(28px + env(safe-area-inset-bottom));
   min-height: 100%;
   display: flex;
   flex-direction: column;
+  gap: 18px;
+}
+
+/* An eyebrow above a title encodes the section, so it earns its place. */
+.eyebrow {
+  font-size: 11.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 600;
+  margin: 0 0 6px;
 }
 
 h1 {
-  font-size: 22px;
-  margin: 4px 0 2px;
-  letter-spacing: -0.01em;
+  font-size: 27px;
+  line-height: 1.22;
+  margin: 0;
+  letter-spacing: -0.018em;
+  text-wrap: balance;
 }
 
 h2 {
-  font-size: 17px;
-  margin: 24px 0 10px;
-  letter-spacing: -0.01em;
+  font-size: 16px;
+  margin: 0;
+  letter-spacing: -0.005em;
 }
 
 p {
-  margin: 0 0 12px;
+  margin: 0;
 }
 
 .sub {
-  color: var(--muted);
-  font-size: 14px;
-  margin: 0 0 20px;
+  color: var(--ink-soft);
+  font-size: 14.5px;
+  max-width: 60ch;
 }
 
-.card {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 14px;
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }
 
-label {
-  display: block;
-  font-size: 13px;
-  color: var(--muted);
-  margin-bottom: 6px;
-  font-weight: 500;
-}
-
-.hint {
-  font-size: 12.5px;
-  color: var(--faint);
-  margin: 6px 0 0;
-  line-height: 1.5;
-}
-
-input,
-textarea,
-select {
-  width: 100%;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 10px;
-  padding: 12px;
-  /* 16px prevents iOS from zooming the viewport when a field is focused. */
-  font-size: 16px;
-  font-family: inherit;
-  margin-bottom: 14px;
-}
-
-input:focus,
-textarea:focus,
-select:focus {
-  outline: none;
-  border-color: var(--accent);
-}
-
-textarea {
-  resize: vertical;
-  min-height: 76px;
+.stack {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .row {
   display: flex;
-  gap: 10px;
+  gap: 12px;
 }
 
 .row > * {
@@ -127,122 +222,314 @@ textarea {
   min-width: 0;
 }
 
+.card {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* -------------------------------------------------------------- forms ---- */
+
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 16px;
+}
+
+.field:last-child {
+  margin-bottom: 0;
+}
+
+label {
+  font-size: 12px;
+  letter-spacing: 0.045em;
+  text-transform: uppercase;
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.hint {
+  font-size: 13px;
+  color: var(--ink-faint);
+  line-height: 1.5;
+  max-width: 58ch;
+}
+
+input,
+textarea,
+select {
+  width: 100%;
+  background: var(--ground);
+  border: 1px solid var(--rule);
+  color: var(--ink);
+  border-radius: var(--radius);
+  padding: 12px 13px;
+  /* 16px stops iOS zooming the viewport on focus. */
+  font-size: 16px;
+  font-family: inherit;
+  transition: border-color 0.15s ease;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--ink-faint);
+}
+
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--focus);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--focus) 18%, transparent);
+}
+
+textarea {
+  resize: vertical;
+  min-height: 82px;
+  line-height: 1.5;
+}
+
+.check {
+  display: flex;
+  gap: 11px;
+  align-items: flex-start;
+  font-size: 15px;
+  color: var(--ink);
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.check input {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+  margin: 1px 0 0;
+  accent-color: var(--seal);
+}
+
+/* ------------------------------------------------------------ buttons ---- */
+
 button {
   font: inherit;
   font-weight: 600;
-  border-radius: 12px;
+  border-radius: var(--radius);
   border: 1px solid transparent;
   padding: 14px 18px;
   cursor: pointer;
-  transition: opacity 0.15s ease;
+  transition:
+    opacity 0.15s ease,
+    background 0.15s ease;
   min-height: 50px;
+  color: var(--ink);
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.42;
   cursor: not-allowed;
 }
 
 .btn-primary {
-  background: var(--accent);
-  color: #1a0f0b;
+  background: var(--seal);
+  color: var(--seal-ink);
   width: 100%;
+  letter-spacing: 0.01em;
 }
 
 .btn-secondary {
-  background: var(--surface-2);
-  color: var(--text);
-  border-color: var(--border);
+  background: var(--surface);
+  border-color: var(--rule-strong);
+  width: 100%;
 }
 
 .btn-ghost {
   background: transparent;
-  color: var(--muted);
-  border-color: var(--border);
+  color: var(--ink-soft);
+  border-color: var(--rule);
+  width: 100%;
 }
 
-.btn-danger {
-  background: transparent;
-  color: var(--bad);
-  border-color: var(--accent-dim);
+.btn-link {
+  background: none;
+  border: none;
+  color: var(--ink-soft);
+  padding: 6px 0;
+  min-height: 0;
+  font-size: 13.5px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  width: auto;
 }
 
-/* ------------------------------------------------------------- recording -- */
+/* --------------------------------------------------------- home list ----- */
+
+.meeting-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 15px 16px;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-weight: 400;
+}
+
+.meeting-item strong {
+  font-weight: 600;
+  font-size: 15.5px;
+}
+
+.meeting-item .meta {
+  font-size: 12.5px;
+  color: var(--ink-faint);
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty-state {
+  border: 1px dashed var(--rule-strong);
+  border-radius: var(--radius-lg);
+  padding: 26px 20px;
+  text-align: center;
+  color: var(--ink-faint);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+/* ---------------------------------------------------------- recording ---- */
 
 .recording {
   flex: 1;
   display: flex;
   flex-direction: column;
+  gap: 14px;
+}
+
+.timer-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
 }
 
 .timer {
+  font-family: var(--font-data);
   font-variant-numeric: tabular-nums;
-  font-size: 52px;
-  font-weight: 300;
+  font-size: 46px;
+  font-weight: 400;
   letter-spacing: -0.02em;
-  text-align: center;
-  margin: 12px 0 2px;
+  line-height: 1;
 }
 
 .timer-label {
-  text-align: center;
-  color: var(--muted);
+  color: var(--ink-soft);
   font-size: 13px;
-  margin-bottom: 18px;
 }
 
-.meter {
-  height: 10px;
-  background: var(--surface-2);
-  border-radius: 999px;
-  overflow: hidden;
-  margin-bottom: 8px;
-  border: 1px solid var(--border);
+.rec-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--seal);
+  margin-right: 7px;
+  vertical-align: 1px;
+  animation: pulse 2s ease-in-out infinite;
 }
 
-.meter-fill {
-  height: 100%;
-  background: linear-gradient(90deg, var(--good), var(--warn));
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+
+/*
+ * A bar array rather than a single fill. A flat bar at low level is
+ * indistinguishable from a broken one, and "is it hearing us?" is the only
+ * question this screen exists to answer.
+ */
+/* Centre-anchored so it reads as a waveform. Bottom-anchored, a row of idle
+   bars looks like a dashed rule rather than a meter at rest. */
+.vu {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  height: 48px;
+  padding: 0 2px;
+}
+
+.vu-bar {
+  flex: 1;
   border-radius: 999px;
-  transition: width 0.1s linear;
+  background: var(--rule-strong);
+  min-height: 4px;
+  transition:
+    height 0.09s linear,
+    background-color 0.2s ease;
+}
+
+.vu-bar.on {
+  background: var(--jade);
+}
+
+.vu-bar.hot {
+  background: var(--brass);
 }
 
 .meter-note {
   font-size: 12.5px;
-  color: var(--faint);
+  color: var(--ink-faint);
   text-align: center;
-  margin-bottom: 18px;
-  min-height: 18px;
+  min-height: 17px;
 }
 
 .meter-note.bad {
-  color: var(--warn);
+  color: var(--brass);
+  font-weight: 600;
 }
 
 .status-strip {
   display: flex;
-  gap: 8px;
+  gap: 7px;
   flex-wrap: wrap;
-  margin-bottom: 14px;
+  justify-content: center;
 }
 
 .pill {
-  font-size: 12px;
-  padding: 5px 10px;
+  font-size: 11.5px;
+  padding: 5px 11px;
   border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
+  font-weight: 500;
+  white-space: nowrap;
 }
 
-.pill.live {
-  color: var(--good);
-  border-color: #2d5f47;
+.pill.good {
+  color: var(--jade);
+  border-color: color-mix(in srgb, var(--jade) 45%, transparent);
+  background: var(--jade-wash);
 }
 
-.pill.offline {
-  color: var(--warn);
-  border-color: #6b5323;
+.pill.warn {
+  color: var(--brass);
+  border-color: color-mix(in srgb, var(--brass) 45%, transparent);
+  background: var(--brass-wash);
 }
 
 .live-feed {
@@ -250,53 +537,54 @@ button:disabled {
   overflow-y: auto;
   -webkit-overflow-scrolling: touch;
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px;
-  margin-bottom: 14px;
-  min-height: 160px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 15px;
+  min-height: 150px;
   font-size: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 11px;
 }
 
 .live-line {
-  margin-bottom: 10px;
-  color: var(--text);
-}
-
-.live-line:last-child {
-  margin-bottom: 0;
+  line-height: 1.5;
 }
 
 .live-time {
-  color: var(--faint);
-  font-size: 12px;
+  color: var(--ink-faint);
+  font-family: var(--font-data);
+  font-size: 11.5px;
   font-variant-numeric: tabular-nums;
   margin-right: 8px;
 }
 
-.empty {
-  color: var(--faint);
-  font-size: 14px;
+.feed-empty {
+  margin: auto;
+  color: var(--ink-faint);
+  font-size: 13.5px;
   text-align: center;
-  padding: 24px 8px;
+  line-height: 1.65;
+  max-width: 34ch;
 }
 
-/* -------------------------------------------------------------- speakers -- */
+/* --------------------------------------------------------- speakers ------ */
 
 .speaker-card {
   background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 14px;
-  margin-bottom: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--radius-lg);
+  padding: 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
 }
 
 .speaker-head {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 10px;
-  margin-bottom: 10px;
 }
 
 .speaker-id {
@@ -306,186 +594,441 @@ button:disabled {
 
 .badge {
   font-size: 11px;
-  padding: 3px 8px;
+  padding: 3px 9px;
   border-radius: 999px;
-  border: 1px solid var(--border);
-  color: var(--muted);
+  border: 1px solid var(--rule);
+  color: var(--ink-soft);
   white-space: nowrap;
+  font-weight: 600;
+  letter-spacing: 0.02em;
 }
 
 .badge.high {
-  color: var(--good);
-  border-color: #2d5f47;
+  color: var(--jade);
+  border-color: color-mix(in srgb, var(--jade) 45%, transparent);
+  background: var(--jade-wash);
 }
 
 .badge.medium {
-  color: var(--warn);
-  border-color: #6b5323;
+  color: var(--brass);
+  border-color: color-mix(in srgb, var(--brass) 45%, transparent);
+  background: var(--brass-wash);
 }
 
 .badge.low {
-  color: var(--bad);
-  border-color: var(--accent-dim);
+  color: var(--seal);
+  border-color: color-mix(in srgb, var(--seal) 45%, transparent);
+  background: var(--seal-wash);
 }
 
+/* Quotes are evidence, so they are set in the document face, not the UI face. */
 .evidence {
-  font-size: 13.5px;
-  color: var(--muted);
-  background: var(--surface-2);
-  border-left: 2px solid var(--accent-dim);
-  padding: 8px 10px;
-  border-radius: 0 8px 8px 0;
-  margin: 0 0 10px;
-}
-
-.speaker-card input {
-  margin-bottom: 8px;
-}
-
-/* --------------------------------------------------------------- minutes -- */
-
-.minutes {
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 18px;
+  font-family: var(--font-doc);
   font-size: 15px;
-  line-height: 1.65;
+  line-height: 1.6;
+  color: var(--ink);
+  background: var(--ground);
+  border-left: 2px solid var(--rule-strong);
+  padding: 9px 12px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+}
+
+.evidence .t {
+  font-family: var(--font-data);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-right: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* --------------------------------------------------------- the document -- */
+
+/*
+ * The minutes are set as a tabled sheet: paper surface, serif, a measure that
+ * stays readable, and a seal-red rule at the head. It should not look like the
+ * rest of the app, because it is not part of the app -- it is the thing the app
+ * produced, and it will be read by people who were not in the room.
+ */
+.sheet {
+  background: var(--surface);
+  border: 1px solid var(--rule);
+  border-top: 3px solid var(--seal);
+  border-radius: 3px 3px var(--radius-lg) var(--radius-lg);
+  padding: 26px 22px;
+  font-family: var(--font-doc);
+  font-size: 16px;
+  line-height: 1.7;
   overflow-x: auto;
 }
 
-.minutes h1 {
-  font-size: 20px;
-  margin: 0 0 4px;
+.sheet-head {
+  text-align: center;
+  border-bottom: 1px solid var(--rule);
+  padding-bottom: 18px;
+  margin-bottom: 20px;
 }
 
-.minutes h2 {
-  font-size: 17px;
-  margin: 0 0 16px;
-  color: var(--muted);
-  font-weight: 500;
+.sheet-body-name {
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--seal);
+  font-family: var(--font-ui);
+  font-weight: 700;
+  margin-bottom: 8px;
 }
 
-.minutes h3 {
-  font-size: 15.5px;
-  margin: 22px 0 8px;
+.sheet-title {
+  font-size: 22px;
+  line-height: 1.3;
+  margin: 0 0 14px;
+  font-weight: 400;
+  text-wrap: balance;
 }
 
-.minutes table {
-  border-collapse: collapse;
-  width: 100%;
-  margin: 12px 0;
-  font-size: 14px;
-}
-
-.minutes th,
-.minutes td {
-  border: 1px solid var(--border);
-  padding: 8px 10px;
-  text-align: left;
-  vertical-align: top;
-}
-
-.minutes th {
-  background: var(--surface-2);
-  color: var(--muted);
-  font-weight: 600;
-}
-
-.minutes blockquote {
-  border-left: 3px solid var(--accent-dim);
-  margin: 12px 0;
-  padding: 2px 0 2px 14px;
-  color: var(--muted);
-}
-
-.minutes code {
-  background: var(--surface-2);
-  padding: 1px 5px;
-  border-radius: 5px;
-  font-size: 12.5px;
-  color: var(--faint);
-}
-
-.minutes details {
-  margin: 10px 0;
+.sheet-facts {
+  font-family: var(--font-ui);
   font-size: 13.5px;
-  color: var(--muted);
+  color: var(--ink-soft);
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  text-align: left;
+  max-width: 34ch;
+  margin: 0 auto;
 }
 
-.minutes summary {
-  cursor: pointer;
-  color: var(--faint);
-  font-size: 13px;
+.sheet-facts dt {
+  color: var(--ink-faint);
+  font-weight: 600;
+  font-size: 11.5px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  padding-top: 2px;
 }
 
-.minutes hr {
-  border: none;
-  border-top: 1px solid var(--border);
-  margin: 22px 0;
+.sheet-facts dd {
+  margin: 0;
+  font-variant-numeric: tabular-nums;
 }
 
-.review-box {
-  background: #241d11;
-  border: 1px solid #6b5323;
+.roll {
+  font-family: var(--font-ui);
+  font-size: 14px;
+  line-height: 1.65;
+  margin-bottom: 20px;
+}
+
+.roll-label {
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  font-weight: 700;
+  margin-right: 7px;
+}
+
+.item {
+  margin-top: 26px;
+}
+
+.item-heading {
+  font-family: var(--font-ui);
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  margin: 0 0 9px;
+  display: flex;
+  gap: 10px;
+}
+
+.item-number {
+  color: var(--seal);
+  font-variant-numeric: tabular-nums;
+  flex: 0 0 auto;
+}
+
+.item p {
+  margin-bottom: 11px;
+}
+
+/* A resolution is the operative part of the minutes. It gets a seal-red rail
+   and the label set in small caps, the way a minute book marks one. */
+.resolution {
+  border-left: 3px solid var(--seal);
+  background: var(--seal-wash);
+  padding: 11px 14px;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 13px 0;
+}
+
+.resolution .kicker {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  color: var(--seal);
+  display: block;
+  margin-bottom: 3px;
+}
+
+.motion {
+  border: 1px solid var(--rule);
   border-radius: var(--radius);
-  padding: 16px;
-  margin-bottom: 14px;
-}
-
-.review-box h2 {
-  margin-top: 0;
-  color: var(--warn);
+  padding: 13px 14px;
+  margin: 13px 0;
+  background: var(--ground);
   font-size: 15px;
 }
 
-.review-box ul {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 14px;
-  color: var(--text);
+.motion .kicker {
+  font-family: var(--font-ui);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.11em;
+  color: var(--ink-faint);
+  display: block;
+  margin-bottom: 4px;
 }
 
-.review-box li {
-  margin-bottom: 7px;
+.motion-meta {
+  font-family: var(--font-ui);
+  font-size: 13px;
+  color: var(--ink-soft);
+  margin-top: 7px;
 }
 
-/* --------------------------------------------------------------- shared --- */
+.outcome-row {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  margin-top: 10px;
+}
 
-.banner {
-  border-radius: var(--radius);
-  padding: 13px 15px;
+.outcome {
+  font-family: var(--font-ui);
+  font-weight: 700;
+  font-size: 11.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  padding: 3px 10px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.tally {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  color: var(--ink-soft);
+  font-variant-numeric: tabular-nums;
+}
+
+.outcome.carried {
+  color: var(--jade);
+  background: var(--jade-wash);
+  border: 1px solid color-mix(in srgb, var(--jade) 40%, transparent);
+}
+
+.outcome.defeated {
+  color: var(--seal);
+  background: var(--seal-wash);
+  border: 1px solid color-mix(in srgb, var(--seal) 40%, transparent);
+}
+
+.outcome.other {
+  color: var(--brass);
+  background: var(--brass-wash);
+  border: 1px solid color-mix(in srgb, var(--brass) 40%, transparent);
+}
+
+.actions-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-family: var(--font-ui);
   font-size: 13.5px;
-  margin-bottom: 14px;
+}
+
+.actions-table th {
+  text-align: left;
+  font-size: 10.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+  border-bottom: 1px solid var(--rule-strong);
+  padding: 0 10px 6px 0;
+  font-weight: 700;
+}
+
+.actions-table td {
+  border-bottom: 1px solid var(--rule);
+  padding: 9px 10px 9px 0;
+  vertical-align: top;
+  line-height: 1.45;
+}
+
+.actions-table td:last-child,
+.actions-table th:last-child {
+  padding-right: 0;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.verify-tag {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  color: var(--brass);
+  border: 1px solid color-mix(in srgb, var(--brass) 45%, transparent);
+  background: var(--brass-wash);
+  border-radius: 4px;
+  padding: 1px 5px;
+  margin-left: 6px;
+  white-space: nowrap;
+}
+
+.sources {
+  margin: 12px 0 0;
+  font-size: 13.5px;
+}
+
+.sources summary {
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-family: var(--font-ui);
+  font-size: 12px;
+  letter-spacing: 0.03em;
+  padding: 5px 0;
+}
+
+.sources-list {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  padding: 9px 0 3px;
+}
+
+.quote {
+  line-height: 1.6;
+}
+
+.quote .t {
+  font-family: var(--font-data);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  margin-right: 7px;
+  font-variant-numeric: tabular-nums;
+}
+
+.colophon {
+  font-family: var(--font-ui);
+  font-size: 11.5px;
+  color: var(--ink-faint);
+  line-height: 1.6;
+  border-top: 1px solid var(--rule);
+  margin-top: 28px;
+  padding-top: 14px;
+}
+
+/* ------------------------------------------------------- review flags ---- */
+
+/*
+ * Collapsed by default. Five open warnings pushed the actual minutes below the
+ * fold, which inverts the priority -- the document is the deliverable, the
+ * checks are a step you take against it.
+ */
+.review {
+  border: 1px solid color-mix(in srgb, var(--brass) 45%, transparent);
+  background: var(--brass-wash);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+
+.review > summary {
+  cursor: pointer;
+  padding: 13px 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--brass);
+  list-style: none;
+}
+
+.review > summary::-webkit-details-marker {
+  display: none;
+}
+
+.review-count {
+  font-variant-numeric: tabular-nums;
+  background: var(--brass);
+  color: var(--ground);
+  border-radius: 999px;
+  min-width: 21px;
+  height: 21px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11.5px;
+  font-weight: 700;
+  flex: 0 0 auto;
+}
+
+.review-chevron {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.review[open] .review-chevron {
+  transform: rotate(180deg);
+}
+
+.review ul {
+  margin: 0;
+  padding: 0 16px 15px 34px;
+  font-size: 14px;
+  color: var(--ink);
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
   line-height: 1.5;
 }
 
+/* -------------------------------------------------------------- misc ----- */
+
+.banner {
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  font-size: 13.5px;
+  line-height: 1.55;
+  border: 1px solid var(--rule);
+  background: var(--surface);
+  color: var(--ink-soft);
+}
+
 .banner.warn {
-  background: #241d11;
-  border: 1px solid #6b5323;
-  color: #f0d9a8;
+  background: var(--brass-wash);
+  border-color: color-mix(in srgb, var(--brass) 40%, transparent);
+  color: var(--ink);
 }
 
 .banner.error {
-  background: #2a1618;
-  border: 1px solid var(--accent-dim);
-  color: #f3c0be;
-}
-
-.banner.info {
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  color: var(--muted);
+  background: var(--seal-wash);
+  border-color: color-mix(in srgb, var(--seal) 40%, transparent);
+  color: var(--ink);
 }
 
 .spinner {
-  width: 34px;
-  height: 34px;
-  border: 3px solid var(--border);
-  border-top-color: var(--accent);
+  width: 30px;
+  height: 30px;
+  border: 2.5px solid var(--rule);
+  border-top-color: var(--seal);
   border-radius: 50%;
   animation: spin 0.9s linear infinite;
-  margin: 32px auto 18px;
+  margin: 0 auto;
 }
 
 @keyframes spin {
@@ -496,40 +1039,32 @@ button:disabled {
 
 .center {
   text-align: center;
-}
-
-.stack {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-}
-
-.meeting-item {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
   gap: 12px;
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 13px 15px;
-  cursor: pointer;
-  text-align: left;
-  width: 100%;
-  color: var(--text);
-  font-weight: 400;
-}
-
-.meeting-item .meta {
-  font-size: 12.5px;
-  color: var(--faint);
-  margin-top: 2px;
+  align-items: center;
+  padding-top: 48px;
 }
 
 .footer-note {
-  color: var(--faint);
+  color: var(--ink-faint);
   font-size: 12px;
   text-align: center;
-  margin-top: 18px;
-  line-height: 1.5;
+  line-height: 1.55;
+  max-width: 46ch;
+  margin: 0 auto;
+}
+
+.transcript-line {
+  font-family: var(--font-doc);
+  font-size: 15px;
+  line-height: 1.6;
+}
+
+.transcript-line .who {
+  font-family: var(--font-ui);
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  margin-right: 6px;
 }
