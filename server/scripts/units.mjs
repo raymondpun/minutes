@@ -12,7 +12,7 @@ const { pcmToWav, pcmDurationSeconds, secondsToByteOffset } = await import(
   '../dist/wav.js'
 );
 const { renderMarkdown } = await import('../dist/pipeline/minutes.js');
-const { liveChunkBytes } = await import('../dist/config.js');
+const { liveChunkBytes, config } = await import('../dist/config.js');
 const { renderDocx } = await import('../dist/pipeline/docx.js');
 
 let failures = 0;
@@ -51,7 +51,37 @@ console.log('\n2. Segment offsets land on sample boundaries');
   check('8 minutes is 15,360,000 bytes', secondsToByteOffset(480) === 15_360_000);
 }
 
-console.log('\n3. Live chunk ramp');
+console.log('\n3. Inline segments fit the request limit');
+{
+  const BYTES_PER_SEC = 32_000;
+  const wav = config.segmentSeconds * BYTES_PER_SEC + 44;
+  const base64 = Math.ceil(wav / 3) * 4;
+
+  // The bug this guards: segmentSeconds was hardcoded at 8 minutes, which is a
+  // 15.4 MB WAV -- larger than maxInlineAudioBytes in this same config, and
+  // 19.5 MB once encoded. Every segmented meeting would have been rejected.
+  check(
+    'a full segment fits the inline cap',
+    wav <= config.maxInlineAudioBytes,
+    `${(wav / 1048576).toFixed(1)} MB vs ${(config.maxInlineAudioBytes / 1048576).toFixed(0)} MB cap`,
+  );
+  check(
+    'base64 on the wire stays under 20 MB',
+    base64 < 20 * 1024 * 1024,
+    `${(base64 / 1048576).toFixed(1)} MB`,
+  );
+  check(
+    'segments are still long enough to be useful',
+    config.segmentSeconds >= 240,
+    `${config.segmentSeconds}s = ${(config.segmentSeconds / 60).toFixed(1)} min`,
+  );
+  check(
+    'overlap is smaller than the segment',
+    config.segmentOverlapSeconds < config.segmentSeconds,
+  );
+}
+
+console.log('\n3b. Live chunk ramp');
 {
   const PER_SECOND = 32_000; // 16 kHz mono 16-bit
   check('20s chunks at the start', liveChunkBytes(0) === 20 * PER_SECOND);

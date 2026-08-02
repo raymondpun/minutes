@@ -26,6 +26,14 @@ export const AUDIO = {
 export const bytesPerSecond =
   AUDIO.sampleRate * AUDIO.channels * AUDIO.bytesPerSample;
 
+export const WAV_HEADER_BYTES = 44;
+
+/**
+ * 10 MB of audio becomes ~13.4 MB of base64, which leaves comfortable room for
+ * the prompt inside a request limit of around 20 MB.
+ */
+const MAX_INLINE_AUDIO_BYTES = 10 * 1024 * 1024;
+
 /**
  * Audio retention. `0` deletes as soon as the minutes exist; a number keeps it
  * that many days; `forever` (or any negative number) keeps it indefinitely.
@@ -82,14 +90,27 @@ export const config = {
     .filter(Boolean),
 
   /**
-   * Vertex caps the size of an inline request payload. We stay well under it so
-   * the base64 expansion (+33%) plus the prompt still fits. Anything larger goes
-   * to GCS if a bucket is configured, or gets segmented if not.
+   * Ceiling on audio sent inline in a request.
+   *
+   * Inline data is base64 encoded, so this becomes ~4/3 this size on the wire,
+   * and the prompt rides along with it. Vertex rejects the whole request past
+   * its limit, so the binary cap has to leave room for both.
    */
-  maxInlineAudioBytes: 14 * 1024 * 1024,
+  maxInlineAudioBytes: MAX_INLINE_AUDIO_BYTES,
 
-  /** Segment length when falling back to chunked transcription (no GCS). */
-  segmentSeconds: 8 * 60,
+  /**
+   * Segment length for the fallback path when no GCS bucket is configured.
+   *
+   * DERIVED, not chosen. This was hardcoded at 8 minutes, which produces a
+   * 15.4 MB WAV -- 19.5 MB once base64 encoded, and over the inline cap this
+   * same config file declares. Every meeting longer than one segment would
+   * have failed, in the default no-bucket setup, on a request the code had
+   * already been told was too big.
+   *
+   * Shorter segments mean more seams and slightly more speaker-label drift.
+   * The real fix is a GCS bucket, which sends the meeting in one pass.
+   */
+  segmentSeconds: Math.floor((MAX_INLINE_AUDIO_BYTES - WAV_HEADER_BYTES) / bytesPerSecond),
 
   /** Overlap between segments so a sentence split across the seam survives. */
   segmentOverlapSeconds: 10,

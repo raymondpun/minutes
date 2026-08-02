@@ -20,6 +20,7 @@ process.env.DATA_DIR = DATA;
 
 const { __setGeneratorForTests } = await import('../dist/gemini.js');
 const { buildTranscript } = await import('../dist/pipeline/transcribe.js');
+const { config } = await import('../dist/config.js');
 const { identifySpeakers, applySpeakerNames } = await import('../dist/pipeline/identify.js');
 const { draftMinutes } = await import('../dist/pipeline/minutes.js');
 const store = await import('../dist/store.js');
@@ -71,8 +72,11 @@ try {
   console.log('\n1. Segmented transcription (no GCS bucket)');
   {
     const id = '2026-08-02-seg00001';
-    // 17 minutes forces three 8-minute segments with 10s overlap.
-    await seedAudio(id, 17 * 60);
+    const stride = config.segmentSeconds - config.segmentOverlapSeconds;
+    // Long enough to force several segments, whatever the derived length is.
+    const totalSeconds = stride * 3 + 60;
+    const expectedSegments = Math.ceil(totalSeconds / stride);
+    await seedAudio(id, totalSeconds);
 
     // Each segment reports times relative to ITSELF, starting at 0. The
     // pipeline has to shift them into meeting time -- getting this wrong is
@@ -80,11 +84,16 @@ try {
     const calls = stub([
       { segments: [
         { start: 5, end: 9, speaker: 'Speaker 1', text: '我係 Raymond' },
-        { start: 470, end: 474, speaker: 'Speaker 2', text: '個 budget approve 咗' },
+        // Inside the overlap window, so the next segment will hear it too.
+        { start: config.segmentSeconds - 7, end: config.segmentSeconds - 3, speaker: 'Speaker 2', text: '個 budget approve 咗' },
+        // Deliberately past the end of the clip the model was handed. Models do
+        // this, and an unclamped value would cite a quote minutes away from
+        // where it was said.
+        { start: config.segmentSeconds + 400, end: config.segmentSeconds + 404, speaker: 'Speaker 2', text: '超出範圍' },
       ] },
       { segments: [
-        // Repeats the overlap, then new content.
-        { start: 0, end: 4, speaker: 'Speaker 2', text: '個 budget approve 咗' },
+        // The same sentence again, from the overlap.
+        { start: 3, end: 7, speaker: 'Speaker 2', text: '個 budget approve 咗' },
         { start: 100, end: 104, speaker: 'Speaker 3', text: 'Peter here' },
       ] },
       { segments: [{ start: 30, end: 34, speaker: 'Speaker 1', text: '散會' }] },
@@ -92,18 +101,32 @@ try {
 
     const segments = await buildTranscript(id, [], () => {});
 
-    check('one model call per segment', calls.length === 3, `${calls.length} calls`);
+    check(
+      'one model call per segment',
+      calls.length === expectedSegments,
+      `${calls.length} calls for ${(totalSeconds / 60).toFixed(1)} min`,
+    );
+    check(
+      'timestamp beyond the clip clamped to it',
+      segments.every((s) => s.start <= totalSeconds),
+      `max ${Math.round(Math.max(...segments.map((s) => s.start)))}s of ${totalSeconds}s`,
+    );
     check(
       'timestamps shifted into meeting time',
       segments.some((s) => Math.abs(s.start - 5) < 1) &&
-        segments.some((s) => s.start > 500),
+        segments.some((s) => s.start > stride),
       segments.map((s) => Math.round(s.start)).join(', '),
     );
     check(
-      'overlap de-duplicated',
+      'sentence spanning the seam minuted once, not twice',
       segments.filter((s) => s.text === '個 budget approve 咗').length === 1,
+      `${segments.filter((s) => s.text === '個 budget approve 咗').length} occurrence(s)`,
     );
-    check('output sorted by time', segments.every((s, i, a) => i === 0 || a[i - 1].start <= s.start));
+    check(
+      'output sorted by time ACROSS segments, not just within them',
+      segments.every((s, i, a) => i === 0 || a[i - 1].start <= s.start),
+      segments.map((s) => Math.round(s.start)).join(', '),
+    );
     check(
       'known speakers carried into later segments',
       String(calls[1].parts.at(-1).text).includes('Speaker 1') &&

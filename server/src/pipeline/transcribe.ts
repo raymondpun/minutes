@@ -127,7 +127,11 @@ export async function buildTranscript(
       maxOutputTokens: 65_536,
     });
 
-    const shifted = normalise(result.segments ?? [], startSec);
+    // Clamp to the segment's own length. A model that reports a timestamp
+    // beyond the clip it was given -- which happens -- would otherwise put a
+    // quote minutes away from where it was actually said, and the citation
+    // would look perfectly plausible while pointing at the wrong moment.
+    const shifted = normalise(result.segments ?? [], startSec, endSec - startSec);
     for (const s of shifted) knownSpeakers.add(s.speaker);
 
     // Drop anything landing inside the overlap we already transcribed, so the
@@ -136,21 +140,45 @@ export async function buildTranscript(
     all.push(...shifted.filter((s) => s.start >= cutoff));
   }
 
+  // Sorted per segment, but never across them until now. Segment boundaries do
+  // not guarantee ordering once anything has been clamped or dropped, and the
+  // transcript is read top to bottom by both the model drafting the minutes and
+  // the human checking them.
+  all.sort((a, b) => a.start - b.start);
   return dedupe(all);
 }
 
-/** Clamp nonsense, shift into meeting-relative time, drop empties. */
-function normalise(segments: TranscriptSegment[], offset: number): TranscriptSegment[] {
+/**
+ * Clamp nonsense, shift into meeting-relative time, drop empties.
+ *
+ * `duration` bounds the timestamps to the clip the model was actually given.
+ * Without it a hallucinated timestamp lands wherever the model imagined, and
+ * since every quote in the minutes is cited by time, a wrong one is worse than
+ * a missing one -- it looks correct.
+ */
+function normalise(
+  segments: TranscriptSegment[],
+  offset: number,
+  duration = Number.POSITIVE_INFINITY,
+): TranscriptSegment[] {
   return segments
     .filter((s) => s && typeof s.text === 'string' && s.text.trim().length > 0)
-    .map((s) => ({
-      start: Math.max(0, (Number(s.start) || 0) + offset),
-      end: Math.max(0, (Number(s.end) || 0) + offset),
-      speaker: (s.speaker || 'Speaker 1').trim(),
-      text: s.text.trim(),
-      language: s.language,
-    }))
+    .map((s) => {
+      const start = clamp(Number(s.start) || 0, 0, duration);
+      const end = clamp(Number(s.end) || 0, start, duration);
+      return {
+        start: start + offset,
+        end: end + offset,
+        speaker: (s.speaker || 'Speaker 1').trim(),
+        text: s.text.trim(),
+        language: s.language,
+      };
+    })
     .sort((a, b) => a.start - b.start);
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }
 
 /**
