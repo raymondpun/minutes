@@ -8,6 +8,7 @@ interface Props {
   minutes: Minutes;
   markdown: string;
   transcript: TranscriptSegment[];
+  onRetranscribe: () => void;
   onNew: () => void;
 }
 
@@ -17,6 +18,7 @@ export default function MinutesView({
   minutes,
   markdown,
   transcript,
+  onRetranscribe,
   onNew,
 }: Props) {
   const [copied, setCopied] = useState(false);
@@ -160,6 +162,11 @@ export default function MinutesView({
           {showTranscript ? 'Hide' : 'Show'} verbatim transcript ({transcript.length}{' '}
           lines)
         </button>
+        {audioAvailable && (
+          <button className="btn-ghost" onClick={onRetranscribe}>
+            Re-process from the recording
+          </button>
+        )}
         <button className="btn-ghost" onClick={onNew}>
           New meeting
         </button>

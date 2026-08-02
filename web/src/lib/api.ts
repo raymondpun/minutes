@@ -71,6 +71,9 @@ export const api = {
       method: 'POST',
     }),
 
+  retranscribe: (id: string) =>
+    request<MeetingMeta>(`/api/meetings/${id}/retranscribe`, { method: 'POST' }),
+
   deleteMeeting: (id: string) =>
     request<{ ok: boolean }>(`/api/meetings/${id}`, { method: 'DELETE' }),
 

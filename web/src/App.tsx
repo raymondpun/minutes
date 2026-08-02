@@ -361,6 +361,31 @@ export default function App() {
     if (next) setView('review');
   };
 
+  const retranscribe = async () => {
+    if (!meta) return;
+    // From a failure there is nothing to lose. From finished minutes there is:
+    // the transcript, the speaker mapping and any names a human corrected all
+    // get regenerated from the audio.
+    if (
+      meta.status !== 'failed' &&
+      !window.confirm(
+        'Re-process the whole recording? The transcript, minutes and any corrected speaker names will be regenerated from scratch.',
+      )
+    ) {
+      return;
+    }
+    setBusy(true);
+    try {
+      await api.retranscribe(meta.id);
+      // The snapshot now says "transcribing", which restarts the polling loop.
+      await loadSnapshot(meta.id);
+    } catch (err) {
+      setError(message(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const reset = () => {
     setMeta(null);
     setSnapshot(null);
@@ -433,6 +458,7 @@ export default function App() {
           busy={busy}
           error={error}
           onConfirmSpeakers={confirmSpeakers}
+          onRetranscribe={retranscribe}
           onNew={reset}
         />
       )}
@@ -524,12 +550,14 @@ function Review({
   busy,
   error,
   onConfirmSpeakers,
+  onRetranscribe,
   onNew,
 }: {
   snapshot: MeetingSnapshot | null;
   busy: boolean;
   error: string | null;
   onConfirmSpeakers: (speakers: SpeakerIdentification[]) => void;
+  onRetranscribe: () => void;
   onNew: () => void;
 }) {
   if (!snapshot) {
@@ -556,6 +584,11 @@ function Review({
             ? 'The recording is still on the server, so nothing is lost — this can be retried.'
             : 'The recording is no longer available.'}
         </p>
+        {snapshot.audioAvailable && (
+          <button className="btn-primary" onClick={onRetranscribe} disabled={busy}>
+            {busy ? 'Starting…' : 'Re-process the recording'}
+          </button>
+        )}
         <button className="btn-ghost" onClick={onNew}>
           Back
         </button>
@@ -586,6 +619,7 @@ function Review({
         minutes={minutes}
         markdown={markdown}
         transcript={transcript}
+        onRetranscribe={onRetranscribe}
         onNew={onNew}
       />
     );

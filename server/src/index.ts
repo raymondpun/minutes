@@ -319,6 +319,48 @@ app.post(
   }),
 );
 
+/**
+ * Re-run the whole pipeline from the recording. The regenerate endpoint above
+ * redrafts from the existing transcript; this one starts over from the audio,
+ * for when the transcript itself is the problem — a failed run, or a model or
+ * prompt change during development.
+ *
+ * It deliberately discards the transcript, the speaker mapping and any
+ * human-corrected names: that is what re-processing means. The client warns
+ * before calling it on a finished meeting.
+ */
+app.post(
+  '/api/meetings/:id/retranscribe',
+  wrap(async (req, res) => {
+    const id = req.params.id!;
+    if (gcs.enabled()) {
+      await gcs.restoreMeeting(id, store.meetingDir(id)).catch(() => {});
+    }
+    const meta = await store.readMeta(id);
+    requireStatus(meta, 'retranscribe', ['complete', 'failed', 'awaiting_speakers']);
+    // Without audio there is nothing to process. Check both homes: the local
+    // recording on this instance, and the archived copy in the bucket.
+    const hasAudio =
+      (await store.pcmSize(id)) > 0 || (gcs.enabled() && (await gcs.audioExists(id)));
+    if (!hasAudio) {
+      return res.status(409).json({
+        error: 'The recording is no longer available, so this meeting cannot be re-processed.',
+      });
+    }
+    const updated = await store.patchMeta(id, {
+      status: 'transcribing',
+      progress: 'Re-processing the recording',
+      error: undefined,
+    });
+    // Archive the new status before the long job, for the same reason stop
+    // does: if the instance dies mid-pipeline, the bucket's meta.json says
+    // "transcribing" and the next open resumes it instead of losing it.
+    await archive(id);
+    startJob(id, runTranscription);
+    res.json(updated);
+  }),
+);
+
 app.get(
   '/api/meetings/:id/minutes.md',
   wrap(async (req, res) => {
