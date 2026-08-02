@@ -121,36 +121,62 @@ export async function archiveMeeting(meetingId: string, dir: string): Promise<vo
   );
 }
 
+async function download(
+  objectName: string,
+  dest: string,
+): Promise<boolean> {
+  try {
+    await fsp.access(dest);
+    return false; // Already here.
+  } catch {
+    /* not present, restore it */
+  }
+  const file = client().bucket(config.gcsBucket!).file(objectName);
+  const [exists] = await file.exists();
+  if (!exists) return false;
+  await fsp.mkdir(path.dirname(dest), { recursive: true });
+  const [contents] = await file.download();
+  await fsp.writeFile(dest, contents);
+  return true;
+}
+
 /**
- * Pull back any archived meetings this instance has never seen. Runs at boot,
- * so a cold start after a week of inactivity still shows the meeting history.
+ * Restore just the meeting index at boot -- one small meta.json per meeting.
+ *
+ * Cloud Run scales to zero, so the disk is empty on every cold start and this
+ * runs every time. Pulling every document for every meeting would therefore get
+ * slower with each meeting ever recorded, and leave the history looking empty
+ * for the first minute after the app wakes up. The index is a few hundred bytes
+ * a meeting; everything else is fetched on demand when a meeting is opened.
  */
-export async function restoreArchive(meetingsRoot: string): Promise<number> {
+export async function restoreIndex(meetingsRoot: string): Promise<number> {
   if (!config.gcsBucket) return 0;
 
   const [files] = await client()
     .bucket(config.gcsBucket)
-    .getFiles({ prefix: 'meetings/' });
+    .getFiles({ prefix: 'meetings/', matchGlob: '**/meta.json' });
 
-  let restored = 0;
-  for (const file of files) {
-    const match = /^meetings\/([^/]+)\/([^/]+)$/.exec(file.name);
-    if (!match) continue;
-    const [, meetingId, name] = match as unknown as [string, string, string];
-    if (!(ARCHIVED as readonly string[]).includes(name)) continue;
+  const results = await Promise.all(
+    files.map(async (file) => {
+      const match = /^meetings\/([^/]+)\/meta\.json$/.exec(file.name);
+      if (!match) return false;
+      const meetingId = match[1]!;
+      return download(file.name, path.join(meetingsRoot, meetingId, 'meta.json'));
+    }),
+  );
+  return results.filter(Boolean).length;
+}
 
-    const destDir = path.join(meetingsRoot, meetingId);
-    const dest = path.join(destDir, name);
-    try {
-      await fsp.access(dest);
-      continue; // Already here.
-    } catch {
-      /* not present, restore it */
-    }
-    await fsp.mkdir(destDir, { recursive: true });
-    const [contents] = await file.download();
-    await fsp.writeFile(dest, contents);
-    restored++;
-  }
-  return restored;
+/**
+ * Fetch one meeting's documents, for when it is actually opened. Cheap to call
+ * repeatedly -- anything already on disk is skipped.
+ */
+export async function restoreMeeting(meetingId: string, dir: string): Promise<number> {
+  if (!config.gcsBucket) return 0;
+  const results = await Promise.all(
+    ARCHIVED.map((name) =>
+      download(`meetings/${meetingId}/${name}`, path.join(dir, name)),
+    ),
+  );
+  return results.filter(Boolean).length;
 }

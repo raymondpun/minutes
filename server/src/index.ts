@@ -103,6 +103,13 @@ app.get(
   '/api/meetings/:id',
   wrap(async (req, res) => {
     const id = req.params.id!;
+    // On a cold start only the meeting index was restored, so pull this
+    // meeting's documents down the first time it is opened.
+    if (gcs.enabled()) {
+      await gcs
+        .restoreMeeting(id, store.meetingDir(id))
+        .catch((err) => console.warn(`[archive] restore failed for ${id}:`, err));
+    }
     const meta = await store.readMeta(id);
     resumeIfStalled(meta);
     const [transcript, speakers, minutes, live, digest, audioBytes] = await Promise.all([
@@ -760,8 +767,13 @@ fs.mkdirSync(path.join(config.dataDir, 'meetings'), { recursive: true });
 void (async () => {
   try {
     if (gcs.enabled()) {
-      const restored = await gcs.restoreArchive(store.meetingsRoot());
-      if (restored > 0) console.log(`[boot] restored ${restored} archived file(s)`);
+      const started = Date.now();
+      const restored = await gcs.restoreIndex(store.meetingsRoot());
+      if (restored > 0) {
+        console.log(
+          `[boot] restored ${restored} meeting(s) into the index in ${Date.now() - started}ms`,
+        );
+      }
     }
     const all = await store.listMeetings();
     all.forEach(resumeIfStalled);

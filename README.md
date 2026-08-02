@@ -366,9 +366,22 @@ Context caching would be the obvious fix for the repeated prompt —
 — but the repeated block here is only ~450 tokens, below the usual minimum
 cacheable size. Not counted above.
 
-Cloud Run scales to zero between meetings, so it costs nothing while idle —
-expect a few seconds of cold start when you press record. Storage for a retained
-two-hour recording is about half a cent a month.
+Cloud Run scales to zero between meetings, so it costs nothing while idle.
+Storage for a retained two-hour recording is about half a cent a month.
+
+### Cold start
+
+Node boots in well under a second; with container start, expect **roughly 2–5
+seconds** the first time you open the app after a quiet period. That lands on
+the home screen, before you have finished the setup form — by the time you press
+Start the instance is warm, and the websocket connects to a running process.
+
+The thing to watch is not the process start but what runs at boot. Because the
+disk is empty on every cold start, the app restores from Cloud Storage — and if
+that restored every document for every meeting it would get slower with each
+meeting ever recorded. So boot restores **only the meeting index** (one small
+`meta.json` each, fetched in parallel), and a meeting's transcript and minutes
+are pulled down the first time you actually open it.
 
 ## Models
 
