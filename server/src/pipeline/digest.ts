@@ -26,6 +26,10 @@ export async function buildDigest(args: {
     parts: [{ text: digestPrompt(args) }],
     responseSchema: DIGEST_SCHEMA,
     maxOutputTokens: 2_048,
+    // Thinking shares the 2048 with the JSON. Summarising five minutes of
+    // transcript into a heading and bullets does not need it, and uncapped it
+    // can starve the output -- which here means a hole in the scrollback.
+    thinkingBudget: 0,
   });
 
   return {

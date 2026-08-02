@@ -25,7 +25,12 @@ export async function transcribeChunk(
       audioPart({ bytes: wav, mimeType: 'audio/wav' }),
       { text: liveTranscriptPrompt(tail) },
     ],
-    maxOutputTokens: 2_048,
+    // A 60s chunk of speech is a few hundred tokens of words; 4096 is
+    // headroom, not a target. thinkingBudget 0 matters more: thinking shares
+    // this budget, and left uncapped it ate the whole 2048 on roughly half of
+    // all chunks -- each one a minute of meeting silently missing on screen.
+    maxOutputTokens: 4_096,
+    thinkingBudget: 0,
   });
 
   return text.trim();

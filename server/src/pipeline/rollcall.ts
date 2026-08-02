@@ -29,6 +29,9 @@ export async function checkRollCall(
     parts: [{ text: rollCallPrompt(text, expectedAttendees) }],
     responseSchema: ROLL_CALL_SCHEMA,
     maxOutputTokens: 1_024,
+    // 1024 tokens is the tightest budget in the app; uncapped thinking would
+    // blow it and the roll call would never be detected as finished.
+    thinkingBudget: 0,
   });
 
   return {
